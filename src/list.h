@@ -1,29 +1,61 @@
+/* 
+ *	Copyright (C) 2005-2017 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "BattleEnc.h"
 #ifndef INT_MAX
 # include <limits.h>
 #endif
 
+//#define PTRSORT
+
+typedef struct tagProcessInfo {
+	TCHAR * szPath;
+	const TCHAR * pExe;
+
+	TCHAR * szText;
+	DWORD dwProcessId;
+
+	DWORD numOfThreads;
+	UINT slotid;
+
+	int iIFF;
+	short _cpu;
+	bool fWatch;
+	bool fThisIsBES;
+} PROCESSINFO;
+
 extern HINSTANCE g_hInst;
 extern HWND g_hWnd;
 extern HWND g_hListDlg;
 extern HFONT g_hFont;
-extern volatile DWORD g_dwTargetProcessId[ 4 ];
-extern volatile BOOL g_bHack[ 4 ];
-extern volatile int g_Slider[ 4 ];
-extern HANDLE hSemaphore[ 4 ];
-extern HANDLE hChildThread[ 4 ];
 
+extern volatile BOOL g_bHack[ MAX_SLOTS ];
+extern volatile int g_Slider[ MAX_SLOTS ];
+extern HANDLE hSemaphore[ MAX_SLOTS ];
+extern HANDLE hChildThread[ MAX_SLOTS ];
+extern TCHAR * ppszStatus[ 18 ];
 BOOL g_bSelNextOnHide = FALSE;
 
-TCHAR g_lpszEnemy[ MAX_PROCESS_CNT ][ MAX_PATH * 2 ];
-int g_numOfEnemies = 0;
+TCHAR * g_lpszEnemy[ MAX_ENEMY_CNT ];
+ptrdiff_t g_numOfEnemies = 0;
+TCHAR * g_lpszFriend[ MAX_FRIEND_CNT ];
+ptrdiff_t g_numOfFriends = 0;
 
-TCHAR g_lpszFriend[ MAX_PROCESS_CNT ][ MAX_PATH * 2 ];
-int g_numOfFriends = 0;
+
+static ptrdiff_t s_nSortedPairs = 0;
+static PROCESS_THREAD_PAIR * s_lpSortedPairs = NULL;
+HANDLE hReconSema = NULL;
 
 #ifndef KEY_UP				
 #define KEY_UP(vk)   (0 <= (int) GetKeyState(vk))
 #endif
+
+
+
 
 typedef struct tagCPUTime {
 	ULONGLONG t;
@@ -32,18 +64,23 @@ typedef struct tagCPUTime {
 } CPUTIME;
 
 
+void CachedList_Refresh( DWORD msMaxWait );
+BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes );
+
 void WriteIni_Time( const TCHAR * pExe );
 BOOL VerifyOSVer( DWORD dwMajor, DWORD dwMinor, int iSP );
 TCHAR * GetPercentageString( LRESULT lTrackbarPos, TCHAR * lpString, size_t cchString );
-static PROCESS_THREAD_PAIR * AllocSortedPairs( ptrdiff_t& numOfPairs );
+
+BOOL LimitProcess_NoWatch( HWND hDlg, TARGETINFO * pTarget, PROCESSINFO& ProcessInfo, const int * aiParams ); // v1.7.5
+TCHAR * PIDToPath_Alloc( DWORD dwProcessID, size_t * pcch ); // v1.7.5
 
 static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam );
-static void _nuke( HWND hDlg, const TARGETINFO& TgtInfo );
+static void _nuke( HWND hDlg, const PROCESSINFO& TgtInfo );
+static void SetProcessInfoMsg( HWND hDlg, const PROCESSINFO& ti, int slotid );
 
-static void SetProcessInfoMsg( HWND hDlg, const TARGETINFO& ti );
-
-static BOOL ProcessToPath( HANDLE hProcess, TCHAR * szPath, DWORD cchPath );
-static bool IsAbsFoe2( LPCTSTR strExe, LPCTSTR strPath );
+static CLEAN_POINTER TCHAR * ProcessToPath_Alloc( HANDLE hProcess, size_t * pcch );
+static bool IsAbsFoe2( const TCHAR * strExe, const TCHAR * strPath );
+static BOOL CALLBACK GetImportantText_EnumProc( HWND hwnd, LPARAM lParam );
 
 //#define MAX_WINDOWS_CNT (1024)
 #define MAX_WINDOWS_CNT (280)
@@ -62,9 +99,8 @@ typedef struct tagWinInfo {
 //    wParam    PID to select; 0 to select the first item; -1 to reuse the currently selected PID
 //    lParam    following flag(s) if necessary
 #define URF_ENSURE_VISIBLE 0x0002 // ListView_EnsureVisible
+#define URF_SORT_ALGO      0x0004 // change sort algo: HIWORD is the new sort_algo
 #define URF_RESET_FOCUS    0x0010 // SetDlgFocus(hLV)
-
-static BOOL CALLBACK GetImportantText_EnumProc( HWND hwnd, LPARAM lParam );
 
 static BOOL CALLBACK WndEnumProc( HWND hwnd, LPARAM lParam )
 {
@@ -108,25 +144,18 @@ typedef struct tagLVSETINFOTIP
 #endif
 */
 
-#if 0
 enum eLVcols {
+	SLOT,
 	PID, IFF, EXE, CPU, TITLE,
 	PATH,
 	THREADS, // # of threads
 	N_COLS
 };
-#else
-enum eLVcols {
-	PID, IFF, EXE, CPU, TITLE,
-	PATH,
-	THREADS, // # of threads
-	N_COLS
-};
-#endif
+
 static void _init_ListView( HWND hDlg )
 {
 	LPTSTR colHeader[ N_COLS ]
-	= { _T("PID "), _T("IFF"), _T("Name"), _T("CPU"), _T("Window Title"),
+	= { _T("Slot"), _T("PID "), _T("IFF"), _T("Name"), _T("CPU"), _T("Window Title"),
 		_T("Path"), _T("Threads")
 	};
 
@@ -151,7 +180,7 @@ static void _init_ListView( HWND hDlg )
 		// The alignment of the leftmost column is always LVCFMT_LEFT; it cannot be changed.
 		col.fmt =
 			( col_idx == IFF ) ? LVCFMT_CENTER :
-			( col_idx == CPU || col_idx == THREADS ) ? LVCFMT_RIGHT : 
+			( col_idx == PID || col_idx == CPU || col_idx == THREADS ) ? LVCFMT_RIGHT : 
 			LVCFMT_LEFT ;
 		col.pszText = colHeader[ col_idx ];
 		col.iSubItem = col.iOrder = col_idx;
@@ -219,16 +248,12 @@ static void _init_DialogPos( HWND hDlg )
 
 static void _init_Slider( HWND hDlg )
 {
-	const bool fAllowMoreThan99 = 
-				!!( MF_CHECKED & GetMenuState( GetMenu( g_hWnd ), 
-					IDM_ALLOWMORETHAN99, MF_BYCOMMAND ) );
+	const bool fAllowMoreThan99 = IsMenuChecked( g_hWnd, IDM_ALLOWMORETHAN99 );
 	const int iMax = fAllowMoreThan99 ? SLIDER_MAX : 99 ;
 	SendDlgItemMessage( hDlg, IDC_SLIDER, TBM_SETRANGE, TRUE, MAKELONG( SLIDER_MIN, iMax ) );
 	SendDlgItemMessage( hDlg, IDC_SLIDER, TBM_SETPAGESIZE, 0, 5 );
 	for( long lPos = 10L; lPos <= 90L; lPos += 10L )
-	{
 		SendDlgItemMessage( hDlg, IDC_SLIDER, TBM_SETTIC, 0, lPos );
-	}
 }
 
 
@@ -247,12 +272,13 @@ static void ListView_SetCurrentSel( HWND hListview, ptrdiff_t sel, BOOL bEnsureV
 	if( bEnsureVisible )
 		ListView_EnsureVisible( hListview, sel, FALSE );
 }
+/*
 static ptrdiff_t ListView_GetCurrentSel( HWND hListview )
 {
 // ListView_GetSelectedColumn only on XP
 	return SendMessage( hListview, LVM_GETNEXTITEM, (WPARAM) -1, LVNI_ALL | LVNI_FOCUSED );
 }
-
+*/
 static void EnableDlgItem( HWND hDlg, int idCtrl, BOOL bEnable )
 {
 	HWND hwndCtrl = GetDlgItem( hDlg, idCtrl );
@@ -269,26 +295,55 @@ static void EnableDlgItem( HWND hDlg, int idCtrl, BOOL bEnable )
 	EnableWindow( hwndCtrl, bEnable );
 }
 
+BOOL HasFreeSlot( void )
+{
+	for( ptrdiff_t g = 0; g < MAX_SLOTS; ++g )
+	{ 
+		if( g != 3 && ! g_bHack[ g ] ) return TRUE;
+	}
+	return FALSE;
+}
+
+
+
+
+
+
 
 static void LV_OnSelChange(
 	HWND hDlg,
-	const ptrdiff_t * MetaIndex,
-	const TARGETINFO * ti,
+#ifdef PTRSORT
+	const PROCESSINFO * const * rgProcessInfo,
+#else
+	const PROCESSINFO * rgProcessInfo,
+#endif
 	ptrdiff_t cItems,
-	int& current_IFF
+	ptrdiff_t selectedItem,
+	ptrdiff_t& curIdx,
+	const TARGETINFO * pTarget
 )
 {
-	HWND hListview = GetDlgItem( hDlg, IDC_TARGET_LIST );
-	const ptrdiff_t selectedItem = ListView_GetCurrentSel( hListview );
-	if( selectedItem < 0 || cItems <= selectedItem ) return;
+	if( selectedItem < 0 || cItems <= selectedItem || ! rgProcessInfo ) return;
+	curIdx = selectedItem;
 
-	const ptrdiff_t index = MetaIndex[ selectedItem ];
-	current_IFF = ti[ index ].iIFF;
+#ifdef PTRSORT
+	const PROCESSINFO& Item = *(rgProcessInfo[ selectedItem ]);
+#else
+	const PROCESSINFO& Item = rgProcessInfo[ selectedItem ];
+#endif
+	const int current_IFF = Item.iIFF;
 
 	BOOL bLimitable = TRUE;
 	BOOL bUnlimitable = FALSE;
-	BOOL bWatchable = !g_bHack[ 3 ];
-	BOOL bUnwatchable = FALSE;
+
+	extern ptrdiff_t g_nPathInfo;
+	const TARGETINFO& info = pTarget[ Item.slotid ];
+
+	// An already-watched target is always re-watchable (with different parameters).
+	// Also, anything is watchable as long as the watch table is not full.
+	// g_nPathInfo is never supposed to be negative, but we'll check that just in case
+	BOOL bWatchable = ( ( g_nPathInfo < MAX_WATCH || info.fWatch ) && 0 <= g_nPathInfo ) ? TRUE : FALSE ;
+//	BOOL bUnwatchable = FALSE;
 	BOOL bSlotAllocated = FALSE;
 
 	BOOL bFriend = TRUE;
@@ -300,15 +355,10 @@ static void LV_OnSelChange(
 	BOOL bShowM = TRUE;
 	BOOL bHide = TRUE;
 
-	ptrdiff_t g = 0;
-	for( ; g < 3; ++g )
-	{
-		if(	ti[ index ].dwProcessId == g_dwTargetProcessId[ g ] )
-			break;
-	}
+	const UINT g = Item.slotid;
 
-	TCHAR szSliderBtnText[ 32 ] = _T("Unl&imit");
-	if( g < MAX_SLOTS )
+	TCHAR szSliderBtnText[ 16 ] = _T("Unl&imit");
+	if( g < MAX_SLOTS && g != 3 )
 	{
 		bSlotAllocated = TRUE;
 		bUnlimitable = g_bHack[ g ];
@@ -317,27 +367,22 @@ static void LV_OnSelChange(
 			_tcscpy_s( szSliderBtnText, _countof(szSliderBtnText), _T("Rel&imit") );
 	}
 
-	TCHAR szWatchBtnText[ 32 ] = _T("Limit/&Watch");
-	if( ! bWatchable && g == 2 )
+//	TCHAR szWatchBtnText[ 16 ] = _T("Limit/&Watch");
+	/*if( ! bWatchable && g == 2 )
 	{
 		bUnwatchable = TRUE;
 		_tcscpy_s( szWatchBtnText, _countof(szWatchBtnText), _T("Un&watch") );
-	}
+	}*/
 
-	if( ti[ index ].fThisIsBES )
+	if( Item.fThisIsBES )
 	{
-#ifdef _DEBUG
-		TCHAR s[100];
-		_stprintf_s(s,100,_T("index=%d: %s is BES\n"),(int)index,ti[index].szExe);
-		OutputDebugString(s);
-#endif
 		bLimitable = FALSE;
 
 		bWatchable = FALSE;
 		bFriend = FALSE;
 		bFoe = FALSE;
 		
-		if( ti[ index ].dwProcessId == GetCurrentProcessId() )
+		if( Item.dwProcessId == GetCurrentProcessId() )
 		{
 			bUnfreeze = FALSE;
 			bShowM = FALSE;
@@ -365,7 +410,7 @@ static void LV_OnSelChange(
 	// To be really limitable, there must be at least one free slot
 	if( bLimitable )
 	{
-		bLimitable = ( !g_bHack[ 0 ] || !g_bHack[ 1 ] || !g_bHack[ 2 ] );
+		bLimitable = HasFreeSlot();
 	}
 
 	//BOOL bUnlocked = ( current_IFF != IFF_SYSTEM &&
@@ -389,15 +434,21 @@ static void LV_OnSelChange(
 	EnableDlgItem( hDlg, IDC_RESET_IFF, bResetIFF );
 	EnableDlgItem( hDlg, IDC_FRIEND, bFriend );
 
-	EnableDlgItem( hDlg, IDC_UNLIMIT_ALL, g_bHack[ 0 ] || g_bHack[ 1 ] || g_bHack[ 2 ] );
+	ptrdiff_t e = 0;
+	for( ; e < MAX_SLOTS; ++e ){ if( e != 3 && g_bHack[ e ] ) break; }
+	EnableDlgItem( hDlg, IDC_UNLIMIT_ALL, e < MAX_SLOTS );
+	
+/* 20151204 @1.7.0.27
 	EnableDlgItem( hDlg, IDC_WATCH, 
 					bWatchable && (bLimitable || bUnlimitable)
 					|| bUnwatchable );
 	SetDlgItemText( hDlg, IDC_WATCH, szWatchBtnText );
+*/
 	
 	EnableDlgItem( hDlg, IDOK, bLimitable );
 //	SetDlgItemText( hDlg, IDOK, szOkBtnText );
 
+	EnableDlgItem( hDlg, IDC_WATCH, bWatchable );
 	/*
 	(@) Unknown [ Friend ] [ Unknown ] [ Foe ]
 	^^^         ^        ^
@@ -410,15 +461,14 @@ static void LV_OnSelChange(
 	rect.left = 10;
 	InvalidateRect( hDlg, &rect, TRUE );
 
-	SetProcessInfoMsg( hDlg, ti[ index ] );
+	SetProcessInfoMsg( hDlg, Item, (int) g );
 
-
-	if( g < 3 )
+	if( g < MAX_SLOTS && g != 3 )
 	{
 		if( GetFocus() != GetDlgItem( hDlg, IDC_SLIDER ) )
 		{
 			const int iSlider = g_Slider[ g ];
-			TCHAR strPercent[ 32 ] = _T("");
+			TCHAR strPercent[ 16 ] = _T("");
 			GetPercentageString( iSlider, strPercent, _countof(strPercent) );
 			SendDlgItemMessage( hDlg, IDC_SLIDER, TBM_SETPOS, (WPARAM) TRUE, (LPARAM) iSlider );
 			SetDlgItemText( hDlg, IDC_TEXT_PERCENT, strPercent );
@@ -426,18 +476,32 @@ static void LV_OnSelChange(
 	}
 }
 
-static void SetProcessInfoMsg( HWND hDlg, const TARGETINFO& ti )
+static void SetProcessInfoMsg( HWND hDlg, const PROCESSINFO& ti, int slotid )
 {
 #if 1
-	TCHAR szHeader[ CCHPATH + 64 ] = _T("");
-	_stprintf_s( szHeader, _countof(szHeader), 
-				_T("PID %lu: %s (%lu Thread%s)"),
-				ti.dwProcessId,
-				ti.szExe,
-				ti.numOfThreads,
-				( ti.numOfThreads == 1 )? _T("") : _T("s") );
-	SetDlgItemText( hDlg, IDC_GROUPBOX, szHeader );
-	SetDlgItemText( hDlg, IDC_EDIT_INFO, ti.szPath );
+	TCHAR hdr[ 128 ];
+	if( slotid == MAX_SLOTS )
+	{
+		_sntprintf_s( hdr, _countof(hdr), _TRUNCATE,
+								_T("PID %lu: %s"),
+								ti.dwProcessId, ti.pExe );
+	}
+	else
+	{
+		_sntprintf_s( hdr, _countof(hdr), _TRUNCATE,
+								_T("PID %lu: %s (Target #%d)"),
+								ti.dwProcessId, ti.pExe,
+								slotid < 3 ? slotid + 1 : slotid );
+	}
+	
+	TCHAR current_text[ CCHPATH ] = _T("");
+	GetDlgItemText( hDlg, IDC_GROUPBOX, current_text, (int) _countof(current_text) );
+	if( _tcscmp( current_text, hdr ) != 0 )
+		SetDlgItemText( hDlg, IDC_GROUPBOX, hdr );
+	
+	GetDlgItemText( hDlg, IDC_EDIT_INFO, current_text, (int) _countof(current_text) );
+	if( _tcscmp( current_text, ti.szPath ) != 0 )
+		SetDlgItemText( hDlg, IDC_EDIT_INFO, ti.szPath );
 
 #else
 	ptrdiff_t numOfThreads = 0;
@@ -469,7 +533,7 @@ static void SetProcessInfoMsg( HWND hDlg, const TARGETINFO& ti )
 	_stprintf_s( msg, cchmsg, strFormat, // ~2400 (plus 32*numOfThreads)
 					lpTarget->szExe, // 520
 					lpTarget->szPath, // 520
-					*lpTarget->szText ? lpTarget->szText : _T("<no text>"), // 1024
+					lpTarget->szText ? lpTarget->szText : _T("<no text>"), // 1024
 					lpTarget->dwProcessId, // 8
 					lpTarget->dwProcessId, // 10
 					(unsigned) numOfThreads // 10
@@ -531,60 +595,73 @@ static LRESULT CALLBACK SubLVProc( HWND hLV, UINT uMessage, WPARAM wParam, LPARA
 	return CallWindowProc( DefLVProc, hLV, uMessage, wParam, lParam );
 }
 
-static LRESULT CALLBACK SubTBProc( HWND hTB, UINT uMessage, WPARAM wParam, LPARAM lParam )
+
+bool TB_OnLButtonDown( HWND hTB )
 {
-	/*if( uMessage == WM_SETFOCUS )
+	POINT ptClicked = {0};
+	RECT rcThumb = {0};
+	GetCursorPos( &ptClicked );
+	ScreenToClient( hTB, &ptClicked );
+	SendMessage( hTB, TBM_GETTHUMBRECT, 0, (LPARAM) &rcThumb );
+	
+	if( PtInRect( &rcThumb, ptClicked ) ) return false;
+
+	LONG lNewPos = -1L;
+	RECT rcChannel = {0};
+	SendMessage( hTB, TBM_GETCHANNELRECT, 0, (LPARAM) &rcChannel );
+
+	const LONG nTicks = (LONG) SendMessage( hTB, TBM_GETNUMTICS, 0, 0 );
+	for( LONG n = 0L; n < nTicks - 2; ++n )
 	{
-		HWND hDlg = GetParent( hTB );
-		HWND hLV = GetDlgItem( hDlg, IDC_TARGET_LIST );
-		LVITEM li;
-		li.mask = LVIF_PARAM;
-		li.iItem = (int) ListView_GetCurrentSel( hLV );
-		li.iSubItem = 0;
-		ListView_GetItem( hLV, &li );
-
-		int k = 0;
-		while( k < MAX_SLOTS && g_dwTargetProcessId[ k ] != (DWORD) li.lParam ) ++k;
-
-		if( k < MAX_SLOTS )
+		const LONG x = (LONG) SendMessage( hTB, TBM_GETTICPOS, (WPARAM) n, 0 );
+		if( x != -1L && labs( x - ptClicked.x ) < 3L ) // Clicked on/near a tick
 		{
-			const int iSlider = g_Slider[ k ];
-			SendDlgItemMessage( hDlg, IDC_SLIDER, TBM_SETPOS, TRUE, iSlider );
-			TCHAR szPercent[ 32 ] = _T("");
-			SetDlgItemText( hDlg, IDC_TEXT_PERCENT, 
-							GetPercentageString( iSlider, szPercent, _countof(szPercent) ) );
-			OutputDebugString(L"PERCENT=");
-			OutputDebugString(szPercent);
-			OutputDebugString(L"\n");
+			lNewPos = (LONG) SendMessage( hTB, TBM_GETTIC, (WPARAM) n, 0 );
+			break;
 		}
 	}
-	else*/ if( uMessage == WM_KILLFOCUS )
+
+	if( lNewPos == -1L )
 	{
-		TCHAR szTarget[ CCHPATH ] = _T("");
-		GetDlgItemText( GetParent( hTB ), IDC_EDIT_INFO, szTarget, CCHPATH );
-		SetSliderIni( szTarget, (int) SendMessage( hTB, TBM_GETPOS, 0, 0 ) );
+		LONG lTotalWidth = rcChannel.right - rcChannel.left;
+		LONG lMaxPos = (LONG) SendMessage( hTB, TBM_GETRANGEMAX, 0, 0 );
+		lNewPos = (LONG)( lMaxPos * ( ptClicked.x - rcChannel.left ) / (double) lTotalWidth + 0.5 );
+	}
+
+	SendMessage( hTB, TBM_SETPOS, TRUE, lNewPos );
+	SendMessage( GetParent( hTB ), WM_HSCROLL, MAKEWPARAM( TB_THUMBPOSITION, lNewPos ), (LPARAM) hTB );
+	SendMessage( GetParent( hTB ), WM_HSCROLL, TB_ENDTRACK, (LPARAM) hTB );
+	
+	return true;
+}
+
+static LRESULT CALLBACK SubTBProc( HWND hTB, UINT uMessage, WPARAM wParam, LPARAM lParam )
+{
+	if( uMessage == WM_KILLFOCUS )
+	{
+		TCHAR szTarget[ CCHPATH ];
+		if( GetDlgItemText( GetParent( hTB ), IDC_EDIT_INFO, szTarget, CCHPATH ) )
+		{
+			LRESULT slider = SendMessage( hTB, TBM_GETPOS, 0, 0 );
+			SetSliderIni( szTarget, slider );
+		}
 	}
 	else if( uMessage == WM_MOUSEWHEEL )
 	{
 		return TB_OnMouseWheel( hTB, wParam );
+	}
+	else if( uMessage == WM_LBUTTONDOWN )
+	{
+		if( TB_OnLButtonDown( hTB ) )
+			return TRUE;
 	}
 
 	return CallWindowProc( DefTBProc, hTB, uMessage, wParam, lParam );
 }
 
 
-/*
-static int cputime_comp( const void * pv1, const void * pv2 )
-{
-	const CPUTIME& t1 = *static_cast<const CPUTIME *>( pv1 );
-	const CPUTIME& t2 = *static_cast<const CPUTIME *>( pv2 );
-	if( t1.pid < t2.pid ) return -1;
-	if( t1.pid > t2.pid ) return +1;
-	return 0;
-}
-*/
 
-static void _add_item( HWND hwndList, int iff, TARGETINFO& ti )
+static void _add_item( HWND hwndList, int iff, PROCESSINFO& ti )
 {
 	LVITEM item = {0};
 	item.mask = LVIF_PARAM;
@@ -593,11 +670,21 @@ static void _add_item( HWND hwndList, int iff, TARGETINFO& ti )
 	item.lParam = (LONG) ti.dwProcessId;
 	const int itemIdx = ListView_InsertItem( hwndList, &item );
 
+	if( ti.slotid != MAX_SLOTS )
+	{
+		TCHAR szSlotText[ 8 ];
+		_stprintf_s( szSlotText, _countof(szSlotText), _T("#%d%c"), 
+										(int)( ti.slotid < 3 ? ti.slotid + 1 : ti.slotid ),
+										( ti.slotid == 2 && g_bHack[ 3 ] ) ? _T('W') : _T('\0') );
+		ListView_SetItemText( hwndList, itemIdx, SLOT, szSlotText );
+	}
+
 #define M (48)
 	TCHAR szShortText[ M + 1 ] = _T(""); // up to M cch, not incl. the term NUL
 
+	_stprintf_s( szShortText, _countof(szShortText), _T("%lu"), ti.dwProcessId );
+/*
 	_stprintf_s( szShortText, _countof(szShortText), _T("%5lu"), ti.dwProcessId );
-
 #ifdef _UNICODE
 	TCHAR * p = &szShortText[ 0 ];
 	while( *p == _T(' ') ) // make leading spaces (if any) prettier
@@ -605,7 +692,7 @@ static void _add_item( HWND hwndList, int iff, TARGETINFO& ti )
 		*p++ = _T('\x2007'); // normal SPACE to Unicode Figure-space
 	}
 #endif
-
+*/
 	ListView_SetItemText( hwndList, itemIdx, PID, szShortText );
 
 	if( 0 < iff )
@@ -621,10 +708,11 @@ static void _add_item( HWND hwndList, int iff, TARGETINFO& ti )
 #endif
 	}
 
-	_stprintf_s( szShortText, _countof(szShortText), _T("%02.0f"), ti._cpu );
+	_stprintf_s( szShortText, _countof(szShortText), _T("%02d"), (int) ti._cpu );
 	ListView_SetItemText( hwndList, itemIdx, CPU, szShortText );
 
-	if( STRUNCATE == _tcsncpy_s( szShortText, _countof(szShortText), ti.szText, _TRUNCATE ) )
+	if( STRUNCATE == _tcsncpy_s( szShortText, _countof(szShortText), 
+						ti.szText ? ti.szText : _T(""), _TRUNCATE ) )
 	{
 #ifdef _UNICODE
 		szShortText[ M - 1 ] = _T('\x2026');
@@ -637,58 +725,119 @@ static void _add_item( HWND hwndList, int iff, TARGETINFO& ti )
 	}
 #undef M
 
-	ListView_SetItemText( hwndList, itemIdx, EXE, (LPTSTR) ti.szExe );
+	ListView_SetItemText( hwndList, itemIdx, EXE, (LPTSTR)( ti.pExe ? ti.pExe : _T("") ) );
 	ListView_SetItemText( hwndList, itemIdx, TITLE, szShortText );
-	ListView_SetItemText( hwndList, itemIdx, PATH, (LPTSTR) ti.szPath );
+	ListView_SetItemText( hwndList, itemIdx, PATH, ti.szPath ? ti.szPath : _T("") );
 	_stprintf_s( szShortText, _countof(szShortText), _T("%lu"), ti.numOfThreads );
 	ListView_SetItemText( hwndList, itemIdx, THREADS, szShortText );
 }
+#ifdef PTRSORT
+# define PICAST(ptr) (**static_cast<const PROCESSINFO* const *>(ptr))
+#else
+# define PICAST(ptr) (*static_cast<const PROCESSINFO*>(ptr))
+#endif
+static int picmp_SLOT( const void * pv1, const void * pv2 )
+{
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
 
-static int target_comp_CPU( const void * pv1, const void * pv2 )
-{
-	const TARGETINFO& target1 = *static_cast<const TARGETINFO *>( pv1 );
-	const TARGETINFO& target2 = *static_cast<const TARGETINFO *>( pv2 );
-	if( target1._cpu > target2._cpu ) return -1;
-	if( target1._cpu < target2._cpu ) return +1;
-	
-	return (int)( target1.dwProcessId - target2.dwProcessId );
+	if( target1.slotid == target2.slotid )
+		return ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+
+	return (int) target1.slotid - (int) target2.slotid;
 }
-static int target_comp_CPU2( const void * pv1, const void * pv2 )
+static int picmp_SLOT2( const void * pv1, const void * pv2 )
 {
-	return target_comp_CPU( pv2, pv1 );
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
+	int id1 = (target1.slotid == MAX_SLOTS)? -1 : (int) target1.slotid;
+	int id2 = (target2.slotid == MAX_SLOTS)? -1 : (int) target2.slotid;
+
+	if( id1 == id2 )
+		return ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+
+	return id2 - id1;
+}
+static int picmp_IFF( const void * pv1, const void * pv2 )
+{
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
+
+	int result = target2.iIFF - target1.iIFF;
+	if( ! result )
+	{
+		result = _tcsicmp( target1.pExe ? target1.pExe : _T(""),
+							target2.pExe ? target2.pExe : _T("") );
+		
+		if( ! result )
+			result = ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+	}
+	return result;
+}
+static int picmp_IFF2( const void * pv1, const void * pv2 )
+{
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
+
+	int result = target1.iIFF - target2.iIFF;
+	if( ! result )
+	{
+		result = _tcsicmp( target1.pExe ? target1.pExe : _T(""),
+							target2.pExe ? target2.pExe : _T("") );
+		
+		if( ! result )
+			result = ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+	}
+	return result;
 }
 
-static int target_comp_PID( const void * pv1, const void * pv2 )
+static int picmp_CPU( const void * pv1, const void * pv2 )
 {
-	const TARGETINFO& target1 = *static_cast<const TARGETINFO *>( pv1 );
-	const TARGETINFO& target2 = *static_cast<const TARGETINFO *>( pv2 );
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
+
+	if( target1._cpu == target2._cpu )
+		return ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+
+	return target2._cpu - target1._cpu;
+}
+static int picmp_CPU2( const void * pv1, const void * pv2 )
+{
+	return picmp_CPU( pv2, pv1 );
+}
+
+static int picmp_PID( const void * pv1, const void * pv2 )
+{
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
 	return ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
 }
-static int target_comp_PID2( const void * pv1, const void * pv2 )
+static int picmp_PID2( const void * pv1, const void * pv2 )
 {
-	return target_comp_PID( pv2, pv1 );
+	return picmp_PID( pv2, pv1 );
 }
 
-static int target_comp_EXE( const void * pv1, const void * pv2 )
+static int picmp_EXE( const void * pv1, const void * pv2 )
 {
-	const TARGETINFO& target1 = *static_cast<const TARGETINFO *>( pv1 );
-	const TARGETINFO& target2 = *static_cast<const TARGETINFO *>( pv2 );
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
 
-	int result = _tcsicmp( target1.szExe, target2.szExe );
+	int result = _tcsicmp( target1.pExe ? target1.pExe : _T(""),
+							target2.pExe ? target2.pExe : _T("") );
 	if( ! result )
 		result = ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
 	
 	return result;
 }
-static int target_comp_EXE2( const void * pv1, const void * pv2 )
+static int picmp_EXE2( const void * pv1, const void * pv2 )
 {
-	return target_comp_EXE( pv2, pv1 );
+	return picmp_EXE( pv2, pv1 );
 }
 
-static int target_comp_PATH( const void * pv1, const void * pv2 )
+static int picmp_PATH( const void * pv1, const void * pv2 )
 {
-	const TARGETINFO& target1 = *static_cast<const TARGETINFO *>( pv1 );
-	const TARGETINFO& target2 = *static_cast<const TARGETINFO *>( pv2 );
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
 
 	int result = _tcsicmp( target1.szPath, target2.szPath );
 	if( ! result )
@@ -696,41 +845,74 @@ static int target_comp_PATH( const void * pv1, const void * pv2 )
 	
 	return result;
 }
-static int target_comp_PATH2( const void * pv1, const void * pv2 )
+static int picmp_PATH2( const void * pv1, const void * pv2 )
 {
-	return target_comp_PATH( pv2, pv1 );
+	return picmp_PATH( pv2, pv1 );
 }
-static int target_comp_THREADS( const void * pv1, const void * pv2 )
+static int picmp_THREADS( const void * pv1, const void * pv2 )
 {
-	const TARGETINFO& target1 = *static_cast<const TARGETINFO *>( pv1 );
-	const TARGETINFO& target2 = *static_cast<const TARGETINFO *>( pv2 );
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
 	
-	if( target1.numOfThreads != target2.numOfThreads )
-		return (INT) target1.numOfThreads - (INT) target2.numOfThreads;
+	if( target1.numOfThreads > target2.numOfThreads ) return +1;
+	if( target1.numOfThreads < target2.numOfThreads ) return -1;
+	return ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+}
+static int picmp_THREADS2( const void * pv1, const void * pv2 )
+{
+	return picmp_THREADS( pv2, pv1 );
+}
+
+static int picmp_TITLE( const void * pv1, const void * pv2 )
+{
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
+
+	int result = 0;
+	if( ! target1.szText )
+	{
+		if( target2.szText ) result = +1;
+		else result = ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+	}
+	else if( ! target2.szText )
+	{
+		result = -1;
+	}
 	else
-		return (INT) target1.dwProcessId - (INT) target2.dwProcessId;
-}
-static int target_comp_THREADS2( const void * pv1, const void * pv2 )
-{
-	return target_comp_THREADS( pv2, pv1 );
-}
+	{
+		result = _tcsicmp( target1.szText, target2.szText );
 
-
-static int target_comp_TITLE( const void * pv1, const void * pv2 )
-{
-	const TARGETINFO& target1 = *static_cast<const TARGETINFO *>( pv1 );
-	const TARGETINFO& target2 = *static_cast<const TARGETINFO *>( pv2 );
-
-	int result = _tcsicmp( target1.szText, target2.szText );
-	if( ! result )
-		result = ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+		if( ! result )
+			result = ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
+	}
 	
 	return result;
 }
-static int target_comp_TITLE2( const void * pv1, const void * pv2 )
+static int picmp_TITLE2( const void * pv1, const void * pv2 )
 {
-	return target_comp_TITLE( pv2, pv1 );
+	const PROCESSINFO& target1 = PICAST( pv1 );
+	const PROCESSINFO& target2 = PICAST( pv2 );
+
+	int result = 0;
+	if( ! target1.szText )
+	{
+		if( target2.szText ) result = +1;
+		else result = ( target1.dwProcessId > target2.dwProcessId ) ? -1 : +1 ;
+	}
+	else if( ! target2.szText )
+	{
+		result = -1;
+	}
+	else
+	{
+		result = _tcsicmp( target2.szText, target1.szText );
+		if( ! result )
+			result = ( target1.dwProcessId > target2.dwProcessId ) ? -1 : +1 ;
+	}
+	
+	return result;
 }
+
 static int pair_comp( const void * pv1, const void * pv2 )
 {
 	const PROCESS_THREAD_PAIR& pair1 = *static_cast<const PROCESS_THREAD_PAIR *>( pv1 );
@@ -738,42 +920,40 @@ static int pair_comp( const void * pv1, const void * pv2 )
 
 	if( pair1.pid < pair2.pid ) return -1;
 	if( pair1.pid > pair2.pid ) return +1;
-
-	if( pair1.tid < pair2.tid ) return -1;
-	if( pair1.tid > pair2.tid ) return +1;
-		
-	return 0;
+	// NOTE: if you do bsearch, return 0 when equal
+	return ( pair1.tid < pair2.tid ) ? (-1) : (+1) ;
 }
-/*static int pair_compS( const void * pv1, const void * pv2 )
-{
-	const PROCESS_THREAD_PAIR& pair1 = *static_cast<const PROCESS_THREAD_PAIR *>( pv1 );
-	const PROCESS_THREAD_PAIR& pair2 = *static_cast<const PROCESS_THREAD_PAIR *>( pv2 );
-
-	if( pair1.pid < pair2.pid ) return -1;
-	if( pair1.pid > pair2.pid ) return +1;
-
-	return 0;
-}*/
 
 typedef struct tagFindImportantText {
 	TCHAR * pszText; // must be able to store MAX_WINDOWTEXT cch
 	DWORD_PTR dwImportance;
 } IMPORTANT_TEXT;
 
-static void GetProcessWindowText(
+static CLEAN_POINTER TCHAR * GetProcessWindowText(
 	const PROCESS_THREAD_PAIR * pairs,
-	ptrdiff_t numOfThreads,
-	TCHAR * pWindowText // cch: MAX_WINDOWTEXT
-)
+	ptrdiff_t numOfThreads )
 {
-	*pWindowText = _T('\0');
+	TCHAR * lpWindowText = NULL;
 
+	TCHAR szBuffer[ MAX_WINDOWTEXT ];
+
+	szBuffer[ 0 ] = _T('\0');
 	IMPORTANT_TEXT it;
-	it.pszText = pWindowText;
+	it.pszText = szBuffer;
 	it.dwImportance = 0;
 
 	for( ptrdiff_t threadIndex = 0; threadIndex < numOfThreads; ++threadIndex )
 		EnumThreadWindows( pairs[ threadIndex ].tid, &GetImportantText_EnumProc, (LPARAM) &it );
+
+	if( szBuffer[ 0 ] )
+	{
+		size_t cchMem = _tcslen( szBuffer ) + 1;
+		lpWindowText = (TCHAR *) HeapAlloc( GetProcessHeap(), 0, cchMem * sizeof(TCHAR) );
+		if( lpWindowText )
+			_tcscpy_s( lpWindowText, cchMem, szBuffer );
+	}
+
+	return lpWindowText;
 }
 
 #define LIST_SYSTEM_PROCESS (2)
@@ -787,313 +967,333 @@ extern GetProcessTimes_t g_pfnGetProcessTimes;
 // than in sorted_pairs, because it's a different snap taken few ms later.
 
 static ptrdiff_t UpdateProcessSnap(
-	TARGETINFO ** ppti,
-	ptrdiff_t * pMax,
-	int listLevel,
-	int * pi
+	PROCESSINFO *& rgProcessInfo,
+	bool fListAll,
+	ptrdiff_t * pNumOfPairs,
+	ptrdiff_t cPrevItems
 )
 {
 	static CPUTIME * s_lpCPUTime = NULL;
 	static ptrdiff_t s_cntCPUTime = 0;
 	static ULONGLONG s_tPrev = 0;
 
-	if( ! ppti || ! pMax || ! pi )
+	if( ! rgProcessInfo || ! pNumOfPairs )
 	{
-#ifdef _DEBUG
-		OutputDebugString(_T("Freeing s_lpCPUTime...\n"));
-#endif
 		if( s_lpCPUTime )
 		{
-			HeapFree( GetProcessHeap(), 0, s_lpCPUTime );
+			MemFree( s_lpCPUTime );
 			s_lpCPUTime = NULL;
 			s_cntCPUTime = 0;
+			s_tPrev = 0;
 		}
 		return 0;
 	}
-	LPTARGETINFO& target = *ppti;
-	ptrdiff_t& maxItems = *pMax;
 
-	//** HOTFIX @ 20140306
-	memset( target, 0, maxItems * sizeof(TARGETINFO) );
-	// HOTFIX END**
+	SIZE_T K = HeapSize( GetProcessHeap(), 0, rgProcessInfo ) / sizeof(PROCESSINFO);
+	if( K < (SIZE_T) cPrevItems )
+	{
+		TCHAR s[100];_stprintf_s(s,100,_T("DEBUG ME\n\n\tK=%d prev=%d"),(int)K,(int)cPrevItems);
+		MessageBox(NULL,s,APP_NAME,MB_ICONSTOP|MB_TOPMOST);
 
-	//TCHAR szSysDir[ MAX_PATH + 1 ] = _T("");
-	//GetSystemDirectory( szSysDir, MAX_PATH );
+		cPrevItems = (ptrdiff_t) K;
+	}
+	for( ptrdiff_t i = 0; i < cPrevItems; ++i )
+	{
+		if( rgProcessInfo[ i ].szPath )
+		{
+			HeapFree( GetProcessHeap(), 0, rgProcessInfo[ i ].szPath );
+			rgProcessInfo[ i ].szPath = NULL;
+		}
+		
+		if( rgProcessInfo[ i ].szText )
+		{
+			HeapFree( GetProcessHeap(), 0, rgProcessInfo[ i ].szText );
+			rgProcessInfo[ i ].szText = NULL;
+		}
+	}
+
+	*pNumOfPairs = 0;
 
 	ptrdiff_t numOfPairs = 0;
-	PROCESS_THREAD_PAIR * sorted_pairs = AllocSortedPairs( numOfPairs );
+
+	PROCESS_THREAD_PAIR * sorted_pairs = NULL;
+	bool fCachedOperation = false;
+	if( WaitForSingleObject( hReconSema, 100 ) == WAIT_OBJECT_0 )
+	{
+		numOfPairs = s_nSortedPairs;
+		sorted_pairs = (PROCESS_THREAD_PAIR*) HeapAlloc( GetProcessHeap(), 0, 
+														numOfPairs * sizeof(PROCESS_THREAD_PAIR) );
+		
+		if( sorted_pairs && s_lpSortedPairs && numOfPairs )
+		{
+			memcpy( sorted_pairs, s_lpSortedPairs, numOfPairs * sizeof(PROCESS_THREAD_PAIR) );
+			fCachedOperation = true;
+		}
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+	}
+
+	if( ! fCachedOperation )
+	{
+#ifdef _DEBUG
+		OutputDebugString(_T("\t###NOT###\n"));
+#endif
+		if( sorted_pairs ) MemFree( sorted_pairs );
+		sorted_pairs = AllocSortedPairs( numOfPairs, 0 );
+	}
 	
 	if( ! sorted_pairs )
 	{
-		*pi = 0;
 		return 0;
 	}
 
-	*pi = (int) numOfPairs; // debug info
+	// Count the number of Processes
+	SIZE_T numOfPIDs = 0;
+	for( ptrdiff_t px = 0; px < numOfPairs; ++px )
+		if( px == 0 || sorted_pairs[ px ].pid != sorted_pairs[ px - 1 ].pid ) ++numOfPIDs;
 
-	/*WININFO * lpWinInfo = (WININFO*) HeapAlloc( GetProcessHeap(), 0, sizeof(WININFO) );
-													//VirtualAlloc( NULL, sizeof(WININFO),
-													//MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE );
-		
-	if( ! lpWinInfo )
+	MemFree( rgProcessInfo );
+	rgProcessInfo = (PROCESSINFO *) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
+													sizeof(PROCESSINFO) * numOfPIDs );
+
+	if( rgProcessInfo == NULL )
 	{
-		HeapFree( GetProcessHeap(), 0, sorted_pairs );
+		MemFree( sorted_pairs );
+		sorted_pairs = NULL;
 		return 0;
-	}*/
+	}
+	
+	CPUTIME * lpCPUTime = (CPUTIME *) MemAlloc( sizeof(CPUTIME), numOfPIDs );
+	if( ! lpCPUTime )
+	{
+		MemFree( sorted_pairs );
+		sorted_pairs = NULL;
+		return 0;
+	}
 
 	const DWORD dwCurrentPID = GetCurrentProcessId();
 
 	FILETIME ft = {0};
 	GetSystemTimeAsFileTime( &ft );
 	const ULONGLONG tNow = ((ULONGLONG) ft.dwHighDateTime) << 32 | ft.dwLowDateTime;
-	const double CPUTimeDenom = ( tNow - s_tPrev ) / 100.0;
-	const bool fCheckCPUTime = s_lpCPUTime && CPUTimeDenom != 0.0;
-/*
-	HANDLE hProcessSnap = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
-	if( hProcessSnap == INVALID_HANDLE_VALUE )
-	{
-		HeapFree( GetProcessHeap(), 0L, lpWinInfo );
-		HeapFree( GetProcessHeap(), 0L, sorted_pairs );
-		return 0;
-	}
+
+#if defined(_MSC_VER) && _MSC_VER < 1400
+	const double CPUTimeDenom = (double)(LONGLONG)( tNow - s_tPrev ) / 100.0;
+#else
+	const double CPUTimeDenom = (double)(ULONGLONG)( tNow - s_tPrev ) / 100.0;
+#endif
 	
-	PROCESSENTRY32 pe32;
-	pe32.dwSize = sizeof( PROCESSENTRY32 );
+	const bool fCheckCPUTime = ( s_tPrev != 0 ) && ( s_tPrev < tNow ) && ( s_lpCPUTime != NULL );
 
+	ptrdiff_t pix = 0; // rgProcessInfo array index
+	ptrdiff_t cx = 0;    // CPUTime array (s_lpCPUTime) index
+#ifdef _DEBUG
+	SIZE_T skipped = 0;
+#endif
 
-	for( BOOL bSuccess = Process32First( hProcessSnap, &pe32 );
-			bSuccess; bSuccess = Process32Next( hProcessSnap, &pe32 ) )
-*/
-
-	ptrdiff_t index = 0; // index of target
-	ptrdiff_t cx = 0;    // CPUTime array (s_lpCPUTime) indeX
 	for( ptrdiff_t s = 0, cntThreads; s < numOfPairs; s += cntThreads )
 	{
-		DWORD dwProcessID = sorted_pairs[ s ].pid;
+		const DWORD dwProcessID = sorted_pairs[ s ].pid;
 		cntThreads = 1;
 		while( s + cntThreads < numOfPairs && sorted_pairs[ s + cntThreads ].pid == dwProcessID )
 			++cntThreads;
 
-		if( dwProcessID == 0 ) continue;
-
-		target[ index ].iIFF = IFF_UNKNOWN;
-
-/*
-		if( pe32.th32ProcessID == 0 ) // system idle process?
-			continue; // TODO***
-*/
-
-		// itself or another instance of BES
-		/*if( pe32.th32ProcessID == dwCurrentPID
-			|| _tcsicmp( pe32.szExeFile, _T( "BES.exe" ) ) == 0	)*/
-		if( dwProcessID == dwCurrentPID )
+		if( dwProcessID == 0 
+			|| dwProcessID == dwCurrentPID && ! fListAll )
 		{
-			if( ListLess( listLevel ) ) continue;
-				
-			target[ index ].fThisIsBES = true;
-			target[ index ].iIFF = IFF_SYSTEM;
+#ifdef _DEBUG
+			++skipped;
+#endif
+			continue;
 		}
 
 		HANDLE hProcess = OpenProcess(
 			//PROCESS_QUERY_INFORMATION | PROCESS_SET_INFORMATION | PROCESS_VM_READ,
 			PROCESS_QUERY_INFORMATION,
-			FALSE,
-			dwProcessID //pe32.th32ProcessID
-		);
+			FALSE, dwProcessID );
 
-		if( hProcess == NULL ) continue;
-/*
-		if( hProcess == NULL )
+		if( hProcess == NULL ) {
+#ifdef _DEBUG
+			++skipped;
+#endif
+			continue;
+		}
+
+
+		FILETIME ftCreated, ftExited, ftKernel, ftUser;
+		if( g_pfnGetProcessTimes
+			&& (*g_pfnGetProcessTimes)( hProcess, &ftCreated, &ftExited, &ftKernel, &ftUser ) )
 		{
-			if( ListMore( listLevel ) ) // list everything anyway
-			{
-				target[ index ].iIFF = IFF_SYSTEM;
+			ULONGLONG t	= ((ULONGLONG) ftKernel.dwHighDateTime << 32 | ftKernel.dwLowDateTime )
+							+ ((ULONGLONG) ftUser.dwHighDateTime << 32 | ftUser.dwLowDateTime );
 
-				hProcess = OpenProcess(
-					PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-					FALSE,
-					pe32.th32ProcessID
-				);
-			}
-			else
+			if( fCheckCPUTime )
 			{
-				continue;
+				while( cx < s_cntCPUTime && s_lpCPUTime[ cx ].pid < dwProcessID )
+					++cx;
+
+				if( cx < s_cntCPUTime && s_lpCPUTime[ cx ].pid == dwProcessID )
+				{
+					ULONGLONG CPUTimeDiff =	t - s_lpCPUTime[ cx ].t;
+#if defined(_MSC_VER) && _MSC_VER < 1400
+					double d = (double) (LONGLONG) CPUTimeDiff / CPUTimeDenom;
+#else
+					double d = (double) CPUTimeDiff / CPUTimeDenom;
+#endif
+
+					if( 0 <= d && d <= 100.0 )
+						rgProcessInfo[ pix ]._cpu = (short)( d + 0.5 );
+					else
+						rgProcessInfo[ pix ]._cpu = (short) 100;
+				}
+			}
+
+			lpCPUTime[ pix ].pid = dwProcessID;
+			lpCPUTime[ pix ].t = t;
+		}
+
+		rgProcessInfo[ pix ].iIFF = IFF_UNKNOWN;
+
+#ifdef _DEBUG
+		if(rgProcessInfo[ pix ].szPath)
+		{
+			OutputDebugString(rgProcessInfo[ pix ].szPath);
+			OutputDebugString(_T("###WHY###\n"));
+		}
+#endif
+
+		rgProcessInfo[ pix ].szPath = ProcessToPath_Alloc( hProcess, NULL );
+
+
+#if 0
+		DWORD_PTR dw1 = 0, dw2 = 0;
+		SetLastError(0);
+		BOOL b = GetProcessAffinityMask( hProcess, &dw1, &dw2 );
+		TCHAR ss[1000];
+		swprintf_s(ss,1000,L"dw1=%u dw2=%u b=%d e=%u %s\n",dw1,dw2,b,GetLastError(),rgProcessInfo[pix].szPath);
+		OutputDebugString(ss);
+#endif
+
+		const TCHAR * pExe;
+		if( rgProcessInfo[ pix ].szPath )
+		{
+			pExe = _tcsrchr( rgProcessInfo[ pix ].szPath, _T('\\') );
+			if( pExe && pExe[ 1 ] ) ++pExe;
+			else pExe = rgProcessInfo[ pix ].szPath;
+			rgProcessInfo[ pix ].pExe = pExe;
+
+			if( dwProcessID == dwCurrentPID
+				|| ! _tcsicmp( pExe, _T("BES.exe") )
+					&& IsProcessBES( dwProcessID, sorted_pairs + s, cntThreads ) )
+			{
+				if( ! fListAll )
+				{
+					// Free it; otherwise it leaks next time in this loop 20140405
+					TcharFree( rgProcessInfo[ pix ].szPath );
+					rgProcessInfo[ pix ].szPath = NULL;
+					continue;
+				}
+					
+				rgProcessInfo[ pix ].fThisIsBES = true;
+				rgProcessInfo[ pix ].iIFF = IFF_SYSTEM;
+			}
+			// These are absolutely foes (IFF_ABS_FOE)
+			// We should make sure they are in the Enemy list.
+			else if( rgProcessInfo[ pix ].iIFF == IFF_UNKNOWN )
+			{
+				if( IsAbsFoe2( pExe, rgProcessInfo[ pix ].szPath ) ) //20111230
+				{
+					rgProcessInfo[ pix ].iIFF = IFF_ABS_FOE;
+				}
 			}
 		}
-*/
-		//if( hProcess != NULL )
+		else //if( dwErr == ERROR_ACCESS_DENIED )
 		{
-			FILETIME ftCreated, ftExited, ftKernel, ftUser;
-			if( g_pfnGetProcessTimes
-				&& (*g_pfnGetProcessTimes)( hProcess, &ftCreated, &ftExited, &ftKernel, &ftUser ) )
+			// rgProcessInfo[ pix ].szPath is NULL here
+
+			if( ! fListAll )
+				continue;
+
+			// Since the old value is NUL, this doesn't leak
+			rgProcessInfo[ pix ].szPath	= TcharAlloc( 7 );
+			_tcscpy_s( rgProcessInfo[ pix ].szPath, 7, _T("System") );
+			rgProcessInfo[ pix ].pExe = rgProcessInfo[ pix ].szPath;
+			pExe = rgProcessInfo[ pix ].szPath;
+				
+			rgProcessInfo[ pix ].iIFF = IFF_SYSTEM;
+		}
+
+#ifdef _DEBUG
+		if(rgProcessInfo[ pix ].szText)OutputDebugString(_T("###WHY###\n"));
+#endif
+		rgProcessInfo[ pix ].szText = GetProcessWindowText( sorted_pairs + s, cntThreads );
+		rgProcessInfo[ pix ].dwProcessId = dwProcessID;
+		rgProcessInfo[ pix ].numOfThreads = (DWORD) cntThreads;
+
+		if( pExe )
+		{
+			// Detect user-defined foes
+			if( rgProcessInfo[ pix ].iIFF == IFF_UNKNOWN )
 			{
-				target[ index ].CPUTime
-					= ((ULONGLONG) ftKernel.dwHighDateTime) << 32 | ftKernel.dwLowDateTime;
-				target[ index ].CPUTime
-					+= ((ULONGLONG) ftUser.dwHighDateTime) << 32 | ftUser.dwLowDateTime;
-
-				if( fCheckCPUTime )
+				for( ptrdiff_t i = 0; i < g_numOfEnemies; ++i )
 				{
-					while( cx < s_cntCPUTime && s_lpCPUTime[ cx ].pid < dwProcessID )
-						++cx;
-
-					if( s_lpCPUTime[ cx ].pid == dwProcessID )
+					if( _tcsicmp( pExe, g_lpszEnemy[ i ] ) == 0 )
 					{
-						ULONGLONG CPUTimeDiff = target[ index ].CPUTime - s_lpCPUTime[ cx ].t;
-						target[ index ]._cpu = (float)( CPUTimeDiff / CPUTimeDenom );
+						rgProcessInfo[ pix ].iIFF = IFF_FOE;
+						break;
 					}
 				}
 			}
 
-			if( ProcessToPath( hProcess, target[ index ].szPath, MAX_PATH * 2 ) )
+			// detect friends
+			if( rgProcessInfo[ pix ].iIFF == IFF_UNKNOWN )
 			{
-				PathToExe( target[ index ].szPath, target[ index ].szExe, MAX_PATH * 2 );
-			}
-			else
-			{
-				//_tcscpy_s( target[ index ].szExe, MAX_PATH * 2, pe32.szExeFile );
-				//_tcscpy_s( target[ index ].szPath, MAX_PATH * 2, pe32.szExeFile );
-
-				if( ListLess( listLevel ) ) continue;
-				_tcscpy_s( target[ index ].szExe, MAX_PATH * 2, _T("System") );
-				_tcscpy_s( target[ index ].szPath, MAX_PATH * 2, _T("System") );
-					
-				target[ index ].iIFF = IFF_SYSTEM;
-			}
-
-			///CloseHandle( hProcess ); // close first
-
-			/*
-			// HOTFIX--- 20140302 Fix regression in v1.6.1
-			if( _tcsicmp( target[ index ].szExe, _T("System") ) == 0 )
-			{
-				if( ListLess( listLevel ) ) continue;
-					
-				target[ index ].iIFF = IFF_SYSTEM;
-			} //---END HOTFIX
-			*/
-
-			if( _tcsicmp( target[ index ].szExe, _T( "BES.exe" ) ) == 0
-				&& IsProcessBES( dwProcessID, sorted_pairs + s, cntThreads ) )
-			{
-				if( ListLess( listLevel ) ) continue;
-					
-				target[ index ].fThisIsBES = true;
-				target[ index ].iIFF = IFF_SYSTEM;
-			}
-		}
-		//else // if( hProcess == NULL )
-		//{
-			//_tcscpy_s( target[ index ].szExe, MAX_PATH * 2, pe32.szExeFile );
-			//_tcscpy_s( target[ index ].szPath, MAX_PATH * 2, pe32.szExeFile );
-		//}
-/*
-		GetProcessDetails2(
-			dwProcessID, // pe32.th32ProcessID,
-			&target[ index ],
-			lpWinInfo,
-			sorted_pairs + s,
-			cntThreads, //numOfPairs,
-			cntThreads //(ptrdiff_t) pe32.cntThreads
-		);
-*/
-
-		GetProcessWindowText( sorted_pairs + s, cntThreads, target[ index ].szText );
-		target[ index ].dwProcessId = dwProcessID; //pe32.th32ProcessID;
-		target[ index ].numOfThreads = (DWORD) cntThreads; //pe32.cntThreads;
-
-
-		// These are absolutely foes (IFF_ABS_FOE)
-		// We should make sure they are in the Enemy list.
-		if( target[ index ].iIFF == IFF_UNKNOWN )
-		{
-			if( IsAbsFoe2( target[ index ].szExe, target[ index ].szPath ) ) //20111230
-			{
-				target[ index ].iIFF = IFF_ABS_FOE;
-			}
-		}
-
-		// Detect user-defined foes
-		if( target[ index ].iIFF == IFF_UNKNOWN )
-		{
-			for( int i = 0; i < g_numOfEnemies; ++i )
-			{
-				if( Lstrcmpi( target[ index ].szExe, g_lpszEnemy[ i ] ) == 0 )
+				for( ptrdiff_t i = 0; i < g_numOfFriends; ++i )
 				{
-					target[ index ].iIFF = IFF_FOE;
-					break;
+					if( _tcsicmp( pExe, g_lpszFriend[ i ] ) == 0 )
+					{
+						rgProcessInfo[ pix ].iIFF = IFF_FRIEND;
+						break;
+					}
 				}
 			}
 		}
 
-		// detect friends
-		if( target[ index ].iIFF == IFF_UNKNOWN )
-		{
-			for( int i = 0; i < g_numOfFriends; ++i )
-			{
-				if( Lstrcmpi( target[ index ].szExe, g_lpszFriend[ i ] ) == 0 )
-				{
-					target[ index ].iIFF = IFF_FRIEND;
-					break;
-				}
-			}
-		}
+		++pix;
 
-		++index;
+#ifdef _DEBUG
+		if( numOfPIDs < (SIZE_T) pix )
+			MessageBox( NULL, _T("BAD"), NULL, MB_OK|MB_ICONSTOP|MB_TOPMOST);
+#endif
 
-		if( index == maxItems )
-		{
-			if( 32768 <= index ) // hardcoded limit
-				break;
-
-			LPVOID lpv = HeapReAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, target,
-										sizeof(TARGETINFO) * ( maxItems * 2 ) );
-			if( lpv )
-			{
-				maxItems *= 2;
-				target = (LPTARGETINFO) lpv;
-			}
-			else
-			{
-				index = 0;
-				break;
-			}
-		}
 	}
-
-	//HeapFree( GetProcessHeap(), 0, lpWinInfo );
-
-
-	HeapFree( GetProcessHeap(), 0, sorted_pairs );
- 
-
-
-	if( s_lpCPUTime ) HeapFree( GetProcessHeap(), 0, s_lpCPUTime );
-	s_lpCPUTime = (CPUTIME*) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
-											sizeof(CPUTIME) * index );
-	
-	if( s_lpCPUTime )
+#ifdef _DEBUG
+	if( (SIZE_T) pix == numOfPIDs - skipped )
 	{
-		for( cx = 0; cx < index; ++cx )
-		{
-			s_lpCPUTime[ cx ].pid = target[ cx ].dwProcessId;
-			s_lpCPUTime[ cx ].t   = target[ cx ].CPUTime;
-		}
-
-		// target is based on sorted_pairs, so target is sorted by dwProcessId;
-		// hence s_lpCPUTime is already sorted by pid.
-
-		//qsort( s_lpCPUTime, (size_t) index, sizeof(CPUTIME), cputime_comp );
-
-		s_cntCPUTime = index;
-		s_tPrev = tNow;
+		; //ok
 	}
-	else s_tPrev = (ULONGLONG) 0;
+	else MessageBox( NULL, _T("BAD pix"), NULL, MB_OK|MB_ICONSTOP|MB_TOPMOST);
+#endif
 
-	return index;
+	MemFree( sorted_pairs );
+	sorted_pairs = NULL;
+
+	if( s_lpCPUTime ) MemFree( s_lpCPUTime );
+
+	s_lpCPUTime = lpCPUTime;
+	s_cntCPUTime = pix;
+	s_tPrev = tNow;
+	
+	*pNumOfPairs = numOfPairs; // debug info
+	return pix;
 }
 
-static INT_PTR LV_OnCustomDraw( HWND hDlg, HWND hLV, LPARAM lParam, int * hot )
+static INT_PTR LV_OnCustomDraw(
+	HWND hDlg,
+	HWND hLV,
+	LPARAM lParam,
+	const PROCESSINFO * arPi,
+	DWORD cItems,
+	DWORD dwCurrentSel )
 {
 	NMLVCUSTOMDRAW& cd = *(NMLVCUSTOMDRAW *) lParam;
 	if( cd.nmcd.dwDrawStage == CDDS_PREPAINT
@@ -1103,12 +1303,12 @@ static INT_PTR LV_OnCustomDraw( HWND hDlg, HWND hLV, LPARAM lParam, int * hot )
 	}
 	else if( cd.nmcd.dwDrawStage == ( CDDS_ITEMPREPAINT | CDDS_SUBITEM ) )
 	{
-		const int itemIndex = (int) cd.nmcd.dwItemSpec;
+		DWORD itemIndex = cd.nmcd.dwItemSpec;
 
 		// cd.nmcd.uItemState (CDIS_FOCUS bit) is usable only when the LV has focus;
 		// otherwise it's unclear from this flag which row is currently selected
 		//const bool fHighlight = !!( cd.nmcd.uItemState & CDIS_FOCUS );
-		const bool fHighlight = ( itemIndex == ListView_GetCurrentSel( hLV ) );
+		bool fHighlight = ( itemIndex == dwCurrentSel );
 
 #if 0
 //		cd.clrText = fHighlight ? RGB( 0xFF, 0xFF, 0xFF ) : TEXT_COLOR ;
@@ -1125,7 +1325,8 @@ static INT_PTR LV_OnCustomDraw( HWND hDlg, HWND hLV, LPARAM lParam, int * hot )
 		if( cd.iSubItem == EXE )
 		{
 			// The item is currently being limited
-			if( itemIndex == hot[ 0 ] || itemIndex == hot[ 1 ] || itemIndex == hot[ 2 ] )
+			UINT slotid = (arPi && itemIndex < cItems) ? arPi[ itemIndex ].slotid : MAX_SLOTS ;
+			if( slotid < MAX_SLOTS && g_bHack[ slotid ] )
 			{
 				cd.clrText = TEXT_COLOR;
 				cd.clrTextBk = RGB( 0xff, 0x00, 0x00 );
@@ -1142,7 +1343,7 @@ static INT_PTR LV_OnCustomDraw( HWND hDlg, HWND hLV, LPARAM lParam, int * hot )
 				li.iSubItem = IFF;
 				li.pszText = szIFF;
 				li.cchTextMax = (int) _countof(szIFF);
-				if( SendMessage( hLV, LVM_GETITEMTEXT, (WPARAM) itemIndex, (LPARAM) &li ) )
+				if( SendMessage( hLV, LVM_GETITEMTEXT, itemIndex, (LPARAM) &li ) )
 				{
 					if( *szIFF == _T('+') ) cd.clrTextBk = FOE_COLOR;
 #ifdef _UNICODE
@@ -1156,7 +1357,7 @@ static INT_PTR LV_OnCustomDraw( HWND hDlg, HWND hLV, LPARAM lParam, int * hot )
 			{
 				cd.clrText = RGB( 0x80, 0x00, 0x00 );
 			}
-			else if( cd.iSubItem == EXE || cd.iSubItem == TITLE )
+			else if( cd.iSubItem == SLOT || cd.iSubItem == EXE || cd.iSubItem == TITLE )
 			{
 				cd.clrText = TEXT_COLOR;
 			}
@@ -1184,7 +1385,7 @@ static inline void Tcscpy_s( TCHAR * pDst, size_t cchDst, const TCHAR * pSrc )
 
 static void ActivateSlider( HWND hDlg, int iSlider )
 {
-	TCHAR szPercent[ 32 ] = _T("");
+	TCHAR szPercent[ 16 ] = _T("");
 	GetPercentageString( iSlider, szPercent, _countof(szPercent) );
 	
 	HWND hTB = GetDlgItem( hDlg, IDC_SLIDER );
@@ -1197,4 +1398,80 @@ static void ActivateSlider( HWND hDlg, int iSlider )
 
 	EnableWindow( GetDlgItem( hDlg, IDC_TEXT_PERCENT ), TRUE );
 	SetDlgItemText( hDlg, IDC_TEXT_PERCENT, szPercent );
+}
+/*
+typedef struct tagTargetInfo {
+	TCHAR szPath[ CCHPATH ];
+	//TCHAR szExe[ CCHPATH ];
+
+	const TCHAR * pExe;
+	DWORD dwProcessId;
+
+	int slotid;
+	bool fWatch;
+	bool fThisIsBES;
+	bool fRealTime;
+	bool fUnlimited;
+} TARGETINFO;
+*/
+
+void ResetTi( TARGETINFO& ti )
+{
+	int slotid_saved = ti.slotid;
+
+	if( ti.lpPath ) TcharFree( ti.lpPath );
+	if( ti.disp_path ) TcharFree( ti.disp_path );
+	//if( ti.lpExe ) TcharFree( ti.lpExe );
+
+	ZeroMemory( &ti, sizeof(TARGETINFO) );
+
+	ti.slotid = slotid_saved;
+}
+
+static BOOL TiFromPi( TARGETINFO& ti, const PROCESSINFO& pi )
+{
+	if( ! pi.szPath ) return FALSE;
+
+	ResetTi( ti );
+	
+	size_t cchMem_Path = _tcslen( pi.szPath ) + 1;
+	ti.lpPath = TcharAlloc( cchMem_Path );
+	if( ! ti.lpPath ) return FALSE;
+	_tcscpy_s( ti.lpPath, cchMem_Path, pi.szPath );
+
+	ti.dwProcessId = pi.dwProcessId;
+
+	return TRUE;
+}
+
+BOOL TiCopyFrom( TARGETINFO& dst, const TARGETINFO& src )
+{
+	if( &dst == &src ) return TRUE;
+
+	ResetTi( dst );
+
+	size_t cchMem_Path = _tcslen( src.lpPath ) + 1;
+	dst.lpPath = TcharAlloc( cchMem_Path );
+	if( ! dst.lpPath ) return FALSE;
+	_tcscpy_s( dst.lpPath, cchMem_Path, src.lpPath );
+
+	if( src.disp_path )
+	{
+		size_t cchMem_Disp = _tcslen( src.disp_path ) + 1;
+		dst.disp_path = TcharAlloc( cchMem_Disp ); // 2014-04-01Z
+		if( ! dst.disp_path ) return FALSE;
+		_tcscpy_s( dst.disp_path, cchMem_Disp, src.disp_path );
+	}
+
+	//size_t cchMem_Exe = _tcslen( src.lpExe ) + 1;
+	//dst.lpExe = TcharAlloc( cchMem_Exe );
+	//if( ! dst.lpExe ) return FALSE;
+	//_tcscpy_s( dst.lpExe, cchMem_Exe, src.lpExe );
+
+	dst.dwProcessId = src.dwProcessId;
+	dst.fWatch = src.fWatch;
+	dst.fRealTime = src.fRealTime;
+	dst.fUnlimited = src.fUnlimited;
+
+	return TRUE;
 }

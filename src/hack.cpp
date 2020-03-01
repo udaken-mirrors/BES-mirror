@@ -1,458 +1,594 @@
+/* 
+ *	Copyright (C) 2005-2017 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "BattleEnc.h"
 #include "Trackbar.h"
 
 extern HWND g_hWnd;
 extern HWND g_hSettingsDlg;
-extern HANDLE hSemaphore[ 4 ];
-extern TCHAR g_szTarget[ 3 ][ CCHPATHEX ];
+extern HANDLE hSemaphore[ MAX_SLOTS ];
+extern TCHAR * ppszStatus[ 18 ];
 
-extern volatile DWORD g_dwTargetProcessId[ 4 ];
-extern volatile int g_Slider[ 4 ];
-extern volatile BOOL g_bHack[ 4 ];
+//extern volatile DWORD g_dwTargetProcessId[ MAX_SLOTS ];
+extern volatile int g_Slider[ MAX_SLOTS ];
+extern volatile BOOL g_bHack[ MAX_SLOTS ];
 
 volatile UINT g_uUnit;
 
-BOOL IsMenuItemEnabled( HWND hWnd, const UINT uMenuId );
+DWORD * AllocThreadList( DWORD dwOwnerPID, ptrdiff_t& numOfThreads ); // v1.7.1
+void CachedList_Refresh( DWORD msMaxWait );
 TCHAR * GetPercentageString( LRESULT lTrackbarPos, TCHAR * lpString, size_t cchString );
 
-static int Hack_Worker( LPVOID lpVoid );
-
-BOOL SetDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes );
 BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes );
+void WriteIni_Time( const TCHAR * pExe );
+bool ProcessExists( DWORD dwPID );
+void SetLongStatusText( const TCHAR * szText, TCHAR * pszStatus );
+static int Hack_Worker( void * pv );
 
-unsigned __stdcall Hack( LPVOID lpVoid )
+
+
+void tokendebug( HANDLE hProcess );
+
+unsigned __stdcall Hack( void * pv )
 {
+#ifdef _DEBUG
+	LARGE_INTEGER li = {0};
+	LARGE_INTEGER freq = {0};
+	QueryPerformanceCounter(&li);
+	QueryPerformanceFrequency(&freq);
+	TCHAR s[100];
+	_sntprintf_s(s,_countof(s),_TRUNCATE,_T("0x%x\t<<Hack Thread[%d]>>\t%f\n"),
+			GetCurrentThreadId(),
+			((TARGETINFO*)pv)->slotid,
+			(double) li.QuadPart / freq.QuadPart * 1000.0);
+	OutputDebugString(s);
+#endif
+
+
 	setlocale( LC_ALL, "English_us.1252" ); // _tcsicmp doesn't work properly in the "C" locale
+	SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL );
 
 	timeBeginPeriod( 1 );
 
-	int ret = Hack_Worker( lpVoid );
+	int ret = Hack_Worker( pv );
 
 	timeEndPeriod( 1 );
 
 	return (unsigned) ret;
 }
 
-void WriteIni_Time( const TCHAR * pExe );
-static int Hack_Worker( LPVOID lpVoid )
+static int Hack_Worker( void * pv )
 {
-	TCHAR msg[ 4096 ];
-	LPHACK_PARAMS lphp = (LPHACK_PARAMS) lpVoid;
-	if( ! lphp || ! lphp->lpTarget )
-		return NORMAL_TERMINATION;
+	if( ! pv ) return 0xFFFF;
 
-	const LPTARGETINFO lpTarget = lphp->lpTarget;
-	WriteIni_Time( lpTarget->szExe );
+	TARGETINFO& ti = *(TARGETINFO*) pv;
+	const int iMyId = ti.slotid;
 
-	const int iMyId = lphp->iMyId;
+	if( iMyId < 0 || MAX_SLOTS <= iMyId || iMyId == 3 )
+	{
+		ti.dwProcessId = 0;
+		return 0xFFFE;
+	}
 
-	if( iMyId < 0 || 4 <= iMyId )
-		return NORMAL_TERMINATION;
+	HANDLE hProcess = NULL;
+	DWORD dwOldPriority = 0;
+	BOOL bPrioritySet = FALSE;
+	DWORD dwTargetProcessId = ti.dwProcessId;
+	HANDLE hToken = NULL;
+	BOOL bPrivilege = FALSE;
+	DWORD dwPrevAttributes = 0;
+	TCHAR szEnemyPath[ CCHPATH ] = _T("");
+	_tcscpy_s( szEnemyPath, _countof(szEnemyPath), ti.disp_path ? ti.disp_path : ti.lpPath );
+	//TCHAR szEnemyExe[ CCHPATH ] = _T("");
+	//_tcscpy_s( szEnemyExe, _countof(szEnemyExe), ti.lpExe );
+	RECT minirect = {0};
+	RECT hackrect = {0};
+	SYSTEMTIME st;
+	TCHAR percent[ 16 ];
+	bool fSuspended = false;
 
-	LPTSTR * ppszStatus = lphp->lpszStatus;
-	DWORD dwTargetProcessId = lpTarget->dwProcessId;
+	ptrdiff_t i;
 
 	ptrdiff_t iPrevThreadCount = 0;
 	unsigned int errorflags = 0;
 #define ERR_SUSPEND 1
 #define ERR_RESUME  2
-
-//	UINT menuState = GetMenuState( GetMenu( g_hWnd ), IDM_DEBUGPRIVILEGE, MF_BYCOMMAND );
-//	const bool fDebugPrivilege = ( menuState != (UINT) -1 && menuState & MF_CHECKED );
-
-	RECT minirect; SetRect( &minirect, 20L, 20L + 90L * iMyId, 479L, 40L + 90L * iMyId );
-	RECT hackrect; SetRect( &hackrect, 20L, 20L + 90L * iMyId, 479L, 100L + 90L * iMyId );
-
-	TCHAR lpszEnemyPath[ MAX_PATH * 2 ] = _T("");
-	TCHAR lpszEnemyExe[ MAX_PATH * 2 ] = _T("");
-	_tcscpy_s( lpszEnemyPath, _countof(lpszEnemyPath), lpTarget->szPath );
-	_tcscpy_s( lpszEnemyExe, _countof(lpszEnemyExe), lpTarget->szExe );
-
-	HANDLE hProcess = NULL;
-	DWORD dwOldPriority = NORMAL_PRIORITY_CLASS;
 	int iOpenThreadRetry = 0;
 	int iSuspendThreadRetry = 0;
 	int iResumeThreadRetry = 0;
-	SYSTEMTIME st;
 
-	ptrdiff_t i;
-	for( i = 0 + iMyId * 4; i < 4 + iMyId * 4; ++i )
+	TCHAR msg[ 1024 ] = _T("");
+
+	if( ti._hSync )
 	{
-		ppszStatus[ i ][ 0 ] = _T('\0');
+		if( ti.fSync )
+		{
+			SetEvent( ti._hSync );
+			ti.fSync = false;
+		}
+		else
+		{
+			WaitForSingleObject( ti._hSync, 10000 );
+		}
+		
+		ti._hSync = NULL; // don't close
 	}
-
-	_tcscpy_s( ppszStatus[ 2 + iMyId * 4 ], cchStatus, lpszEnemyPath );
-
-#if 0// !defined( _UNICODE ) // ANSIFIX@20140307(3/5)
-	// for watching...
-	if( iMyId == 2 && strlen( lpszEnemyPath ) >= 19 )
-	{
-		ppszStatus[ 2 + iMyId * 4 ][ 15 ] = '\0';
-		PathToExeEx( ppszStatus[ 2 + iMyId * 4 ], MAX_PATH * 2 );
-	}
+#ifdef _DEBUG
+	LARGE_INTEGER li = {0};
+	LARGE_INTEGER freq = {0};
+	QueryPerformanceCounter(&li);
+	QueryPerformanceFrequency(&freq);
+	_sntprintf_s(msg,_countof(msg),_TRUNCATE,_T("0x%x\t<<Hack_Worker[%d]>> PID=%lu (%s)\t%f\n"),
+			GetCurrentThreadId(),
+			iMyId,
+			dwTargetProcessId,
+			szEnemyPath,
+			(double) li.QuadPart / freq.QuadPart * 1000.0);
+	OutputDebugString(msg);
 #endif
 
-	AdjustLength( ppszStatus[ 2 + iMyId * 4 ] );
+	ptrdiff_t numOfPairs = 0;
+	PROCESS_THREAD_PAIR * sorted_pairs = GetCachedPairs( 1000, numOfPairs );
+	BOOL bBES = IsProcessBES( dwTargetProcessId, sorted_pairs, numOfPairs );
+	if( sorted_pairs )
+	{
+		MemFree( sorted_pairs );
+		sorted_pairs = NULL;
+	}
 
-#ifdef _UNICODE
-	const TCHAR mark = _T('\x25CF');
-#else
-	const TCHAR mark = _T('*');
-#endif
+	if( bBES )
+	{
+		if( g_bHack[ 3 ] == TRUE )
+		{
+			g_bHack[ 3 ] = UNWATCH_NOW;
+		}
+		ti.dwProcessId = TARGET_PID_NOT_SET;
+		PostMessage( g_hWnd, WM_COMMAND, IDM_STOP, 0 );
 
-	HANDLE hToken = NULL;
-	BOOL bPriv = FALSE;
-	DWORD dwPrevAttributes = 0L;
-	
+		_tcscpy_s( ppszStatus[ 16 ], cchStatus, _T( "* Denied *" ) );
+		_tcscpy_s( ppszStatus[ 17 ], cchStatus, _T("BES Can't Target BES"));
+		return THREAD_NOT_OPENED;
+	}
+
+	WriteIni_Time( szEnemyPath );
+
+	// TODO ###
+	SetRect( &minirect, 20L, 20L + 90L * iMyId, 479L, 40L + 90L * iMyId );
+	SetRect( &hackrect, 20L, 20L + 90L * iMyId, 479L, 100L + 90L * iMyId );
+
+
+
+	if( iMyId < 3 )
+	{
+		for( i = 0 + iMyId * 4; i < 4 + iMyId * 4; ++i )
+			ppszStatus[ i ][ 0 ] = _T('\0');
+		
+		SetLongStatusText( szEnemyPath, ppszStatus[ 2 + iMyId * 4 ] );
+	}
+
 	if( g_bHack[ iMyId ] )
 	{
-//		if( fDebugPrivilege )
-			bPriv = EnableDebugPrivilege( &hToken, &dwPrevAttributes );
+		bPrivilege = EnableDebugPrivilege( &hToken, &dwPrevAttributes );
 		
-		hProcess = OpenProcess(	PROCESS_QUERY_INFORMATION | PROCESS_SET_INFORMATION,
+
+		hProcess = OpenProcess(	STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFFF,
 								FALSE, dwTargetProcessId );
+
+		if( hProcess )
+		{
+			WriteDebugLog( _T("OpenProcess 0xFFFF OK") );
+		}
+		else
+		{
+			WriteDebugLog( _T("OpenProcess 0xFFFF failed") );
+			hProcess = OpenProcess(	STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFF,
+								FALSE, dwTargetProcessId );
+
+			if( hProcess )
+			{
+				WriteDebugLog( _T("OpenProcess 0xFFF OK") );
+			}
+			else
+			{
+				WriteDebugLog( _T("OpenProcess 0xFFF failed") );
+				hProcess = OpenProcess(	PROCESS_QUERY_INFORMATION | PROCESS_SET_INFORMATION,
+								FALSE, dwTargetProcessId );
+				if( hProcess )
+				{
+					WriteDebugLog( _T("OpenProcess Q S OK") );
+				}
+				else
+				{
+					WriteDebugLog( _T("OpenProcess Q S failed") );
+					hProcess = OpenProcess(	PROCESS_QUERY_INFORMATION, FALSE, dwTargetProcessId );
+
+					if( hProcess )
+					{
+						WriteDebugLog( _T("OpenProcess Q OK") );
+					}
+					else
+					{
+						WriteDebugLog( _T("OpenProcess Q failed") );
+					}
+				}
+			}
+		}
 		
 		if( hProcess )
 		{
-//TerminateProcess(hProcess, 0x3);
-			dwOldPriority = GetPriorityClass( hProcess );
-			_stprintf_s( msg, _countof(msg),
-						_T( "Target #%d: \"%s\"\r\n\tProcess ID = 0x%08lX : hProcess = 0x%p (Priority: %lu)" ),
-						iMyId + 1, lpszEnemyPath, dwTargetProcessId, hProcess, dwOldPriority );
-			WriteDebugLog( msg );
-			if( lpTarget->fRealTime )
+			WriteDebugLog( ti.lpPath );
+			tokendebug( hProcess );
+
+			if( ti.fRealTime )
 			{
-				WriteDebugLog( SetPriorityClass( hProcess, IDLE_PRIORITY_CLASS )
-								? TEXT( "SetPriorityClass OK" )
-								: TEXT( "SetPriorityClass failed" ) );
+				dwOldPriority = GetPriorityClass( hProcess );
+
+				_stprintf_s( msg, _countof(msg),
+							_T("Target #%d: \"%s\"\r\n")
+							_T("\tProcess ID = %lu : hProcess = 0x%p (Priority: %lu)"),
+							iMyId < 3 ? iMyId + 1 : iMyId,
+							szEnemyPath,
+							dwTargetProcessId, hProcess, dwOldPriority );
+				WriteDebugLog( msg );
+
+				if( dwOldPriority )
+				{
+					bPrioritySet = SetPriorityClass( hProcess, IDLE_PRIORITY_CLASS );
+					WriteDebugLog( bPrioritySet	? TEXT( "SetPriorityClass OK" )
+												: TEXT( "SetPriorityClass failed" ) );
+				}
 			}
 		}
 		else // !hProcess
 		{
 			WriteDebugLog( TEXT( "OpenProcess failed." ) );
-TCHAR s[100];
-_stprintf_s(s,100,_T("OpenProcess failed.\ndwTargetProcessId=%lu\n"),dwTargetProcessId);
-OutputDebugString(s);
-			if( g_bHack[ 3 ] )
-			{
-				g_bHack[ 3 ] = UNWATCH_NOW;
-				g_bHack[ 2 ] = FALSE;
-			}
 
-			GetLocalTime( &st );
-			_tcscpy_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus, _T( "Process ID = n/a" ) );
-			_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus, _T( "%02d:%02d:%02d Initial OpenThread failed" ),
+			if( iMyId < 3 )
+			{
+				GetLocalTime( &st );
+				_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus,
+							_T("Process ID = %lu"), dwTargetProcessId );
+				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
+							_T("%02d:%02d:%02d Initial OpenThread failed"),
 							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
-			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
-
-			if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, (LPLONG) NULL ) )
-			{
-				_stprintf_s( msg, _countof(msg),
-								_T( "* ReleaseSemaphore #%d in Hack()" ),
-								iMyId + 1 );
-				WriteDebugLog( msg );
 			}
-			else
-			{
+
+			ti.dwProcessId = TARGET_PID_NOT_SET;
+//			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
+
+			if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL ) ) {
+				_stprintf_s( msg, _countof(msg), _T("* ReleaseSemaphore #%d in Hack()"),
+							iMyId < 3 ? iMyId + 1 : iMyId );
+			} else {
 				_stprintf_s( msg, _countof(msg),
-							_T( "[!] Target #%d : ReleaseSemaphore failed in Hack(): ErrCode %lu" ),
-							iMyId + 1, GetLastError() );
-				WriteDebugLog( msg );
+							_T("[!] Target #%d : ReleaseSemaphore failed in Hack(): ErrCode %lu"),
+							iMyId < 3 ? iMyId + 1 : iMyId,
+							GetLastError() );
 			}
-			lphp->lpTarget->dwProcessId = TARGET_PID_NOT_SET;
+			WriteDebugLog( msg );
 
-			if( PathToProcessID( lpszEnemyPath ) == (DWORD) -1 )
+			int iRetVal = ! ProcessExists( dwTargetProcessId ) //(PathToProcessID( szEnemyPath ) == (DWORD) -1)
+								? TARGET_MISSING : THREAD_NOT_OPENED ;
+
+			if( iRetVal == THREAD_NOT_OPENED && iMyId == 2 && g_bHack[ 3 ] == TRUE )
 			{
-				PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, TARGET_MISSING );
-				InvalidateRect( g_hWnd, NULL, TRUE );
-
-				if( hToken )
+				Sleep( 3000 );
+				if( ! ProcessExists( dwTargetProcessId )/*PathToProcessID( szEnemyPath ) == (DWORD) -1*/ )
 				{
-					if( bPriv ) 
-						SetDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
-
-					CloseHandle( hToken );
+					iRetVal = TARGET_MISSING;
 				}
-
-				return TARGET_MISSING;
-			}
-			else
-			{
-				PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, THREAD_NOT_OPENED );
-				InvalidateRect( g_hWnd, NULL, TRUE );
-
-				if( hToken )
+				else
 				{
-					if( bPriv ) 
-						SetDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
-
-					CloseHandle( hToken );
+					g_bHack[ 3 ] = UNWATCH_NOW;
+					g_bHack[ 2 ] = FALSE;
 				}
-
-				return THREAD_NOT_OPENED;
 			}
-		}
-
-		TCHAR buf[ 100 ];
-		_stprintf_s( ppszStatus[ 0 + iMyId * 4 ], cchStatus,
-					_T( "Target #%d [ %s ]" ),
-					iMyId + 1,
-					GetPercentageString( g_Slider[ iMyId ], buf, _countof(buf) ) );
-	}
-
-	bool fSuspended = false;
-	
-	for( DWORD dwOuterLoops = 0L;
-			g_bHack[ iMyId ];
-			dwOuterLoops < 0xFFFFffff ? ++dwOuterLoops : dwOuterLoops = 1L )
-	{
-		ptrdiff_t numOfThreads = 0;
-		DWORD * pThreadIDs = ListProcessThreads_Alloc( dwTargetProcessId, numOfThreads );
-
-		if( ! pThreadIDs )
-			break;
-
-		// ----------------------- @@@
-		if( numOfThreads == 0 )
-		{
-			GetLocalTime( &st );
-			_tcscpy_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus, _T( "Process ID = n/a" ) );
-			_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus, _T("%02d:%02d:%02d No threads"),
-							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
-			
-			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
-
-			SetPriorityClass( hProcess, dwOldPriority );
-			CloseHandle( hProcess );
-
-			if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, (LPLONG) NULL ) )
-			{
-				_stprintf_s( msg, _countof(msg), 
-							_T( "* TARGET_MISSING #%d : ReleaseSemaphore in Hack()" ), iMyId + 1 );
-				WriteDebugLog( msg );
-			}
-			else
-			{
-				_stprintf_s( msg, _countof(msg),
-							_T( "[!] Target #%d : ReleaseSemaphore failed in Hack(): ErrCode %lu" ),
-							iMyId + 1, GetLastError() );
-				WriteDebugLog( msg );
-			}
-
-			WriteDebugLog( TEXT("PostMessage Doing...") );
-
-			PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, TARGET_MISSING );
-
-			WriteDebugLog( TEXT("PostMessage Done!") );
-			lphp->lpTarget->dwProcessId = TARGET_PID_NOT_SET;
-
-			HeapFree( GetProcessHeap(), 0L, pThreadIDs );
+			PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, iRetVal );
+			InvalidateRect( g_hWnd, NULL, TRUE );
 
 			if( hToken )
 			{
-				if( bPriv ) 
-					SetDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
+				if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
+				CloseHandle( hToken );
+			}
 
+			return iRetVal;
+		}
+
+		if( iMyId < 3 )
+		{
+			if( ti.wDelay ) {
+				_stprintf_s( ppszStatus[ 0 + iMyId * 4 ], cchStatus,
+						_T( "Target #%d [ Delay %d ms ]" ),
+						iMyId + 1,
+						(int) ti.wDelay );
+			} else {
+				_stprintf_s( ppszStatus[ 0 + iMyId * 4 ], cchStatus,
+						_T( "Target #%d [ %s ]" ),
+						iMyId < 3 ? iMyId + 1 : iMyId,
+						GetPercentageString( g_Slider[ iMyId ], percent, _countof(percent) ) );
+			}
+		}
+	}
+
+	DWORD dwDelay = ti.wDelay; // Initial delay
+	while( dwDelay && g_bHack[ iMyId ] )
+	{
+		DWORD dwSleep = ( dwDelay > 1000UL ) ? 1000UL : dwDelay;
+		Sleep( dwSleep );
+		dwDelay -= dwSleep;
+	}
+	
+	for( DWORD dwOuterLoops = 0; g_bHack[ iMyId ]; ++dwOuterLoops )
+	{
+		//***
+		ptrdiff_t numOfThreads = 0;
+//		DWORD * pThreadIDs = ListProcessThreads_Alloc( dwTargetProcessId, numOfThreads );
+		DWORD * pThreadIDs = AllocThreadList( dwTargetProcessId, numOfThreads );
+
+		if( ! pThreadIDs ) break;
+
+		if( numOfThreads == 0 )
+		{
+			if( iMyId < 3 )
+			{
+				GetLocalTime( &st );
+				_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus, _T("Process ID = %lu"),
+							dwTargetProcessId );
+				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus, _T("%02d:%02d:%02d No threads"),
+							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
+			}
+			
+			ti.dwProcessId = TARGET_PID_NOT_SET;
+//			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
+
+			if( bPrioritySet ) SetPriorityClass( hProcess, dwOldPriority );
+			CloseHandle( hProcess );
+
+			if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL ) )
+			{
+				_stprintf_s( msg, _countof(msg), 
+							_T( "* TARGET_MISSING #%d : ReleaseSemaphore in Hack()" ),
+							iMyId < 3 ? iMyId + 1 : iMyId );
+			}
+			else
+			{
+				_stprintf_s( msg, _countof(msg),
+							_T( "[!] Target #%d : ReleaseSemaphore failed in Hack(): ErrCode %lu" ),
+							iMyId < 3 ? iMyId + 1 : iMyId,
+							GetLastError() );
+			}
+			WriteDebugLog( msg );
+
+			PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, TARGET_MISSING );
+
+			HeapFree( GetProcessHeap(), 0, pThreadIDs );
+			if( hToken )
+			{
+				if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
 				CloseHandle( hToken );
 			}
 
 			return TARGET_MISSING;
 		}
 
-		if( dwOuterLoops == 0L )
+		if( dwOuterLoops == 0 )
 		{
 			iPrevThreadCount = numOfThreads;
-			_stprintf_s( msg, _countof(msg), _T( "Target #%d : iThreadCount = %3d" ),
-							iMyId + 1, (int) numOfThreads );
+			_stprintf_s( msg, _countof(msg), _T( "Target #%d : Thread Count = %3d" ),
+							iMyId < 3 ? iMyId + 1 : iMyId,
+							(int) numOfThreads );
 			WriteDebugLog( msg );
 		}
-		else if( dwOuterLoops % 50UL == 0UL )
+#ifdef _DEBUG
+		else
+#else
+		else if( dwOuterLoops % 50 == 0 )
+#endif
 		{
 			_stprintf_s( msg, _countof(msg),
-						_T( "Target #%d : Loops %5lu, ThreadCnt %3d (Prev %3d)" ), 
-						iMyId + 1, dwOuterLoops, (int) numOfThreads, (int) iPrevThreadCount );
+						_T( "Target #%d : (INFO) Loops %5lu, Thread Count = %3d, PID %lu" ), 
+						iMyId < 3 ? iMyId + 1 : iMyId,
+						dwOuterLoops,
+						(int) numOfThreads,
+						dwTargetProcessId );
 			WriteDebugLog( msg );
 		}
 
-		_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus,
-					_T( "Process ID = %lu [ %d Thread%s ]" ),
-					dwTargetProcessId, (int) numOfThreads,
-					( numOfThreads != 1 ) ? _T("s") : _T("") );
+		if( iMyId < 3 )
+		{
+			_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus,
+						_T( "Process ID = %lu [ %d Thread%s ]" ),
+						dwTargetProcessId, (int) numOfThreads,
+						( numOfThreads != 1 ) ? _T("s") : _T("") );
+		}
 		GetLocalTime( &st );
+
 		if( numOfThreads != iPrevThreadCount || errorflags )
 		{
 			_stprintf_s( msg, _countof(msg),
-						_T( "Target #%d : iThreadCount = %3d (Prev = %d)" ),
-						iMyId + 1, (int) numOfThreads, (int) iPrevThreadCount );
+						_T( "Target #%d : Thread Count = %3d (Prev = %d) flags=%u" ),
+						iMyId < 3 ? iMyId + 1 : iMyId,
+						(int) numOfThreads,
+						(int) iPrevThreadCount,
+						errorflags );
 			WriteDebugLog( msg );
+			
 			iPrevThreadCount = numOfThreads;
+			
 			errorflags = 0;
-			_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
-						_T( "%02d:%02d:%02d Target Re-Locked On: OK" ),
-						(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
+			if( iMyId < 3 )
+				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
+							_T( "%02d:%02d:%02d Target Re-Locked On: OK" ),
+							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
 		}
 		else
 		{
-			_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus, _T( "%02d:%02d:%02d %s: OK" ),
-						(int) st.wHour, (int) st.wMinute, (int) st.wSecond,
-						dwOuterLoops == 0L ? _T( "Started" ) : _T( "Calm" ) );
+			if( iMyId < 3 )
+				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
+							_T( "%02d:%02d:%02d %s: OK" ),
+							(int) st.wHour, (int) st.wMinute, (int) st.wSecond,
+							dwOuterLoops ? _T("Calm") : _T("Started") );
 		}
 
-		HANDLE * pThreadHandles = (HANDLE *) HeapAlloc( GetProcessHeap(), 
-														HEAP_ZERO_MEMORY, 
-														(SIZE_T)( sizeof(HANDLE) * numOfThreads ) );
-
+		// NULL if unused (HEAP_ZERO_MEMORY)
+		HANDLE * pThreadHandles = (HANDLE *) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
+															sizeof(HANDLE) * numOfThreads );
 		if( ! pThreadHandles )
 		{
-			HeapFree( GetProcessHeap(), 0L, pThreadIDs );
+			HeapFree( GetProcessHeap(), 0, pThreadIDs );
 			break;
 		}
-/*
-#if (NTDDI_VERSION >= NTDDI_VISTA)
-#define THREAD_ALL_ACCESS         (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | \
-                                   0xFFFF)
-#else
-#define THREAD_ALL_ACCESS         (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | \
-                                   0x3FF)
-#endif
-*/
-#define TEST2_ACCESS         (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | \
-                                   0xFFFF)
+
+//#define A_M 1
+#undef A_M
 		ptrdiff_t numOfOpenedThreads = 0;
 		for( i = 0; i < numOfThreads; ++i )
 		{
-			pThreadHandles[ i ] = OpenThread( THREAD_SUSPEND_RESUME, FALSE, pThreadIDs[ i ] );
-//			pThreadHandles[ i ] = OpenThread( TEST2_ACCESS, FALSE, pThreadIDs[ i ] );
-			if( ! pThreadHandles[ i ] )
+			pThreadHandles[ i ] = OpenThread( STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFFF,
+											FALSE, pThreadIDs[ i ] );
+			
+			if( pThreadHandles[ i ] )
 			{
-				_stprintf_s( msg, _countof(msg),
-							_T( "[!] Target #%d : OpenThread failed: Thread #%03d, ThreadId 0x%08lX" ),
-							iMyId + 1, (int) i + 1, pThreadIDs[ i ] );
-				WriteDebugLog( msg );
+				//if(i==0) WriteDebugLog(_T("0xFFFF OK"));
 			}
 			else
 			{
+				//if(i==0) WriteDebugLog(_T("0xFFFF failed"));
+				
+				pThreadHandles[ i ] = OpenThread( STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x3FF,
+											FALSE, pThreadIDs[ i ] );
+
+				if( pThreadHandles[ i ] )
+				{
+					//if(i==0) WriteDebugLog(_T("0x3FF OK"));
+				}
+				else
+				{
+					//if(i==0) WriteDebugLog(_T("0x3FF failed"));
+					pThreadHandles[ i ] = OpenThread( THREAD_SUSPEND_RESUME, FALSE, pThreadIDs[ i ] );
+				}
+			}
+
+			if( pThreadHandles[ i ] )
+			{
 				++numOfOpenedThreads;
+			}
+			else
+			{
+				_stprintf_s( msg, _countof(msg),
+							_T( "[!] Target #%d : OpenThread failed: Thread #%03d, ThreadId 0x%08lX" ),
+							iMyId < 3 ? iMyId + 1 : iMyId,
+							(int) i + 1,
+							pThreadIDs[ i ] );
+				WriteDebugLog( msg );
 			}
 		}
 
-		// ###----------------
 		if( numOfOpenedThreads == 0
 			||
 			numOfOpenedThreads != numOfThreads && iOpenThreadRetry > 10
 			||
 			iSuspendThreadRetry > 100
 			||
-			iResumeThreadRetry > 50			
-		)
+			iResumeThreadRetry > 50 )
 		{
-			for( i = 0; i < numOfThreads; ++i ) //@20120513
-			{
-				if( pThreadHandles[ i ] )
-					CloseHandle( pThreadHandles[ i ] );
-			}
+			for( i = 0; i < numOfThreads; ++i )
+				if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
 
 			GetLocalTime( &st );
-			if( iResumeThreadRetry > 50 )
+			if( iMyId < 3 )
 			{
 				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
-							_T( "%02d:%02d:%02d ResumeThread Error" ),
-							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
-				// to do
-				// 'unfreeze'
-			}
-			else if( iSuspendThreadRetry > 100 )
-			{
-				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
-							_T( "%02d:%02d:%02d SuspendThread Error" ),
-							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
-			}
-			else
-			{
-				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
-							_T( "%02d:%02d:%02d OpenThread Error" ),
-							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
-			}
+							_T("%02d:%02d:%02d %s Error"),
+							(int) st.wHour, (int) st.wMinute, (int) st.wSecond,
+							(iResumeThreadRetry > 50) ? _T("ResumeThread")
+							: (iSuspendThreadRetry > 100) ? _T("SuspendThread")
+							: _T("OpenThread") );
 
-			WriteDebugLog( ppszStatus[ 3 + iMyId * 4 ] );
+				WriteDebugLog( ppszStatus[ 3 + iMyId * 4 ] );
+			}
 			WriteDebugLog( TEXT( "### Giving up... ###" ) );
 
-			lphp->lpTarget->dwProcessId = TARGET_PID_NOT_SET; //?
-			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
+			ti.dwProcessId = TARGET_PID_NOT_SET;
+//			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
 
-			SetPriorityClass( hProcess, dwOldPriority );
+			if( bPrioritySet ) SetPriorityClass( hProcess, dwOldPriority );
 			CloseHandle( hProcess );
 
-			// This is needed as a workaround ? (Possibly this works as a workaround) 1.0 beta6
-			UpdateStatus( g_hWnd );
+			UpdateStatus( g_hWnd ); // needed ?
 
 			if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL ) )
 			{
 				_stprintf_s( msg, _countof(msg), 
 							_T( "* THREAD_NOT_OPENED #%d : ReleaseSemaphore in Hack()" ),
-							iMyId + 1 );
+							iMyId < 3 ? iMyId + 1 : iMyId );
 				WriteDebugLog( msg );
 			}
 
-			BOOL bMissing = ( PathToProcessID( lpszEnemyPath ) == (DWORD) -1 );
+			int iRetVal = ! ProcessExists( dwTargetProcessId ) /*(PathToProcessID( szEnemyPath ) == (DWORD) -1)*/
+								? TARGET_MISSING : THREAD_NOT_OPENED ;
 
-			if( ! bMissing && g_bHack[ 3 ] )
+			if( iRetVal == THREAD_NOT_OPENED && iMyId == 2 && g_bHack[ 3 ] == TRUE )
 			{
-				g_bHack[ 3 ] = UNWATCH_NOW;
-				g_bHack[ 2 ] = FALSE;
+				Sleep( 3000 );
+				if( ! ProcessExists( dwTargetProcessId ) /*PathToProcessID( szEnemyPath ) == (DWORD) -1*/ )
+				{
+					iRetVal = TARGET_MISSING;
+				}
+				else
+				{
+					g_bHack[ 3 ] = UNWATCH_NOW;
+					g_bHack[ 2 ] = FALSE;
+				}
 			}
 			
-			WriteDebugLog( TEXT("PostMessage Doing...") );
-
-			PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId,
-							bMissing ? TARGET_MISSING : THREAD_NOT_OPENED );
-
-			WriteDebugLog( TEXT("PostMessage Done!") );
-
-			lphp->lpTarget->dwProcessId = TARGET_PID_NOT_SET;
+			PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, iRetVal );
 
 			InvalidateRect( g_hWnd, NULL, TRUE );
 
-			HeapFree( GetProcessHeap(), 0L, pThreadHandles );
-			HeapFree( GetProcessHeap(), 0L, pThreadIDs );
+			HeapFree( GetProcessHeap(), 0, pThreadHandles );
+			HeapFree( GetProcessHeap(), 0, pThreadIDs );
 
 			if( hToken )
 			{
-				if( bPriv ) 
-					SetDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
-
+				if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
 				CloseHandle( hToken );
 			}
 
-			return bMissing ? TARGET_MISSING : THREAD_NOT_OPENED ;
+			return iRetVal;
 		}
 		else if( numOfOpenedThreads != numOfThreads )
 		{
 			for( i = 0; i < numOfThreads; ++i )
-			{
-				if( pThreadHandles[ i ] )
-					CloseHandle( pThreadHandles[ i ] );
-			}
+				if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
 
 			++iOpenThreadRetry;
 			
 			_stprintf_s( msg, _countof(msg), 
 						_T( "@ Couldn't open some threads: Retrying #%d..." ), iOpenThreadRetry );
 			WriteDebugLog( msg );
-			Sleep( 100UL );
 		
-			HeapFree( GetProcessHeap(), 0L, pThreadHandles );
-			HeapFree( GetProcessHeap(), 0L, pThreadIDs );
+			HeapFree( GetProcessHeap(), 0, pThreadHandles );
+			HeapFree( GetProcessHeap(), 0, pThreadIDs );
+			
+			Sleep( 100 );
+			CachedList_Refresh( 100 );
 			continue;
 		}
 
 		iOpenThreadRetry = 0;
-		// non-volatile snapshot of bHack
-		const bool fActive1 = ( g_bHack[ 0 ] == TRUE );
-		const bool fActive2 = ( g_bHack[ 1 ] == TRUE );
-		const bool fActive3 = ( g_bHack[ 2 ] == TRUE && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE );
 
-		if( fActive1 || fActive2 || fActive3 )
+#if 0
+//		const bool fActive1 = ( g_bHack[ 0 ] == TRUE );
+//		const bool fActive2 = ( g_bHack[ 1 ] == TRUE );
+//		const bool fActive3 = ( g_bHack[ 2 ] == TRUE && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE );
+
+		if( IsActive() )
 		{
 			TCHAR strStatus[ 1024 ] = TEXT( " Limiting CPU load:" );
 
@@ -471,50 +607,72 @@ OutputDebugString(s);
 				MultiByteToWideChar( CP_UTF8, MB_CUTE, S_FRE_2000, -1, strStatus, (int) _countof(strStatus) );
 #endif
 				
-			if( fActive1 )
+			/*if( fActive1 )
 				_tcscat_s( strStatus, _countof(strStatus), _T( " #1" ) );
 				
 			if( fActive2 )
 				_tcscat_s( strStatus, _countof(strStatus), _T( " #2" ) );
 				
 			if( fActive3 )
-				_tcscat_s( strStatus, _countof(strStatus), _T( " #3" ) );
+				_tcscat_s( strStatus, _countof(strStatus), _T( " #3" ) );*/
+
+			for( ptrdiff_t e = 0; e < MAX_SLOTS; ++e )
+			{
+				if( e == 3 ) continue;
+				if( g_bHack[ e ] && ( e != 2 || g_dwTargetProcessId[ 2 ] != WATCHING_IDLE ) )
+				{
+					TCHAR tmp[ 10 ] = _T("");
+					_stprintf_s( tmp, _countof(tmp), _T(" #%d"), (int)( e < 3 ? e + 1 : e ) );
+					_tcscat_s( strStatus, _countof(strStatus), tmp );
+				}
+			}
 		
-			_tcsncpy_s( ppszStatus[ 12 ], cchStatus, strStatus, 256 );
+			_tcsncpy_s( ppszStatus[ 12 ], cchStatus, strStatus, _TRUNCATE );
 		}
 		else
 		{
 			ppszStatus[ 12 ][ 0 ] = _T('\0');
 		}
+#endif
 
 		InvalidateRect( g_hWnd, &hackrect, FALSE );
 
-		DWORD msElapsed = 0L;
-		DWORD sElapsed = 0L;
-		UINT numOfReports = 0;
-#ifdef _DEBUG
-		DWORD dwInnerLoops = 0L;
-#endif
+		DWORD msElapsed = 0;
+		DWORD sElapsed = 0;
+		unsigned numOfReports = 0;
 
 #ifdef _DEBUG
-		while( msElapsed < 3 * 1024 )
-#else
-		while( msElapsed < 10 * 1024 ) // about 10 seconds
+		DWORD dwInnerLoops = 0;
 #endif
+
+		while( msElapsed < 10 * 1024 ) // about 10 seconds
+		//while( msElapsed < 4 * 1024 ) // about 4 seconds
 		{
 #ifdef _DEBUG
 			++dwInnerLoops;
 #endif
-			DWORD TimeRed = 0L;
-			DWORD TimeGreen = 100L;
+			DWORD TimeRed = 0;
+			DWORD TimeGreen = 100;
 			UINT msUnit = UNIT_DEF;
 
 			const int slider = g_Slider[ iMyId ];
 			if( 1 <= slider && slider <= 99 )
 			{
-				msUnit = g_uUnit;
+				if( UNIT_MIN <= ti.wCycle && ti.wCycle <= UNIT_MAX )
+				{
+					msUnit = ti.wCycle;
+
+					//TCHAR dbgstr[ 128 ] = _T("");
+					//_stprintf_s( dbgstr, _countof(dbgstr), _T( "[DEBUG] msUnit = ti.wCycle=%d" ), ti.wCycle );
+					//WriteDebugLog( dbgstr );
+				}
+				else
+				{
+					msUnit = g_uUnit;
+					ti.wCycle = (WORD) 0;
+				}
 				if( !( UNIT_MIN <= msUnit && msUnit <= UNIT_MAX ) ) msUnit = UNIT_DEF;
-				TimeRed = (DWORD)( (double) msUnit / 100.0 * (double) slider + 0.5 );
+				TimeRed = (DWORD)( msUnit / 100.0 * slider + 0.5 );
 				TimeGreen = ( msUnit - TimeRed );
 				TimeRed = __max( 1L, TimeRed );
 				TimeGreen = __max( 1L, TimeGreen );
@@ -526,15 +684,6 @@ OutputDebugString(s);
 				{
 					--TimeRed;
 				}
-
-#ifdef _DEBUG
-				if(dwInnerLoops==1u){
-					WCHAR s[100];
-					swprintf_s(s,100,L"slider=%d: Red=%lu Green=%lu\n", slider, TimeRed, TimeGreen );
-					OutputDebugStringW(s);
-				}
-
-#endif
 			}
 #if SLIDER_MIN == 0
 			else if( slider == 0 )
@@ -565,25 +714,42 @@ OutputDebugString(s);
 #endif
 			}
 
+#ifdef A_M
+			DWORD_PTR dwAM = 0, dwSys = 0;
+			GetProcessAffinityMask( hProcess, &dwAM, &dwSys );
+#endif
 			if( ! fSuspended )
 			{
+#ifdef A_M
+				fSuspended = true;
+				if( ! SetProcessAffinityMask( hProcess, (DWORD_PTR) 0 ) )
+				{
+					_stprintf_s( msg, _countof(msg),
+						_T( "Target #%d : Suspend failed: err=%lu" ),
+								iMyId < 3 ? iMyId + 1 : iMyId,
+								GetLastError() );
+					WriteDebugLog( msg );
+				}
+#else
 				for( i = 0; i < numOfThreads; ++i )
 				{
 					if( pThreadHandles[ i ] )
 					{
 						if( SuspendThread( pThreadHandles[ i ] ) == (DWORD) -1 )
 						{
-							UINT err = GetLastError();
 							errorflags |= ERR_SUSPEND;
 							_stprintf_s( msg, _countof(msg),
-								_T( "Target #%d : SuspendThread failed (Thread #%03d) : Retry=%d : err=%u" ),
-										iMyId + 1, (int) i + 1, iSuspendThreadRetry, err );
+								_T( "Target #%d : SuspendThread failed (Thread #%03d) : Retry=%d : err=%lu" ),
+										iMyId < 3 ? iMyId + 1 : iMyId,
+										(int) i + 1,
+										iSuspendThreadRetry,
+										GetLastError() );
 							WriteDebugLog( msg );
 						}
 						else fSuspended = true;
 					}
 				}
-				//fSuspended = true; //20140204
+#endif
 			}
 
 			if( errorflags & ERR_SUSPEND )
@@ -601,23 +767,45 @@ OutputDebugString(s);
 			Sleep( TimeRed );
 #endif
 			msElapsed += TimeRed;
-			
+
+			// Use a non-volatile flag: (! g_bHack[ iMyId ]) may change between #1 and #2,
+			// and so if we use it, it is possible that the loop breaks at #2 while fSuspended,
+			// without being resumed at #1, if TimeGreen is 0. [FIX @20140317]
+			/*const bool fUnlimitNow = ! g_bHack[ iMyId ];*/
+
 			// if !g_bHack[ iMyId ], the outer loop will break after this step;
 			// in that case, threads must be resumed even if limited 100% ie TimeGreen==0.
-			if( fSuspended && ( TimeGreen || ! g_bHack[ iMyId ] ) )
+			if( fSuspended /*&& ( TimeGreen || fUnlimitNow )*/ ) //#1
 			{
+#ifdef A_M
+				if( ! SetProcessAffinityMask( hProcess, dwAM ) )
+				{
+						errorflags |= ERR_RESUME;
+						_stprintf_s( msg, _countof(msg),
+									_T("Target #%d : Resume failed: ")
+									_T("err=%lu"),
+									iMyId < 3 ? iMyId + 1 : iMyId,
+									GetLastError() );
+						WriteDebugLog( msg );
+				}
+#else
 				for( i = 0; i < numOfThreads; ++i )
 				{
 					if( pThreadHandles[ i ] && ResumeThread( pThreadHandles[ i ] ) == (DWORD) -1 )
 					{
-						UINT err = GetLastError();
 						errorflags |= ERR_RESUME;
 						_stprintf_s( msg, _countof(msg),
-							_T( "Target #%d : ResumeThread failed: Thread #%03d, ThreadId 0x%08lX, iResumeThreadRetry=%d : err=%u" ),
-									iMyId + 1, (int) i + 1, pThreadIDs[ i ], iResumeThreadRetry, err );
+									_T("Target #%d : ResumeThread failed: Thread #%03d, ")
+									_T("ThreadId 0x%08lX, iResumeThreadRetry=%d : err=%lu"),
+									iMyId < 3 ? iMyId + 1 : iMyId,
+									(int) i + 1,
+									pThreadIDs[ i ],
+									iResumeThreadRetry,
+									GetLastError() );
 						WriteDebugLog( msg );
 					}
 				}
+#endif
 				fSuspended = false;
 			}
 
@@ -630,8 +818,14 @@ OutputDebugString(s);
 				iResumeThreadRetry = 0;
 			}
 
-			if( ! g_bHack[ iMyId ] || errorflags )
+			if( ! g_bHack[ iMyId ] ) //#2
 			{
+				break;
+			}
+			else if( errorflags )
+			{
+				Sleep( 100 );
+				CachedList_Refresh( 100 );
 				break;
 			}
 			
@@ -642,64 +836,81 @@ OutputDebugString(s);
 #endif
 			msElapsed += TimeGreen;
 		
+#ifdef _UNICODE
+# define BLINKING_CHAR L'\x25CF'
+#else
+# define BLINKING_CHAR '*'
+#endif
 			if( msElapsed >> 10 != sElapsed ) // report once in a second (1024 ms)
 			{
-				TCHAR buf[ 100 ];
-#if 0//def _DEBUG
-				_stprintf_s( buf, _countof(buf),
-							_T("Out#=%lu (msElapsed=%lu In#=%lu) unit=%u red=%lu green=%lu\r\n"),
-							dwOuterLoops, msElapsed, dwInnerLoops,
-							msUnit, TimeRed, TimeGreen );
-				OutputDebugString( buf );
-#endif
 				sElapsed = msElapsed >> 10;
-
-				_stprintf_s( ppszStatus[ 0 + iMyId * 4 ], cchStatus,
-							_T( "Target #%d [ %s ] %c" ), iMyId + 1,
-							GetPercentageString( slider, buf, _countof(buf) ),
-							( numOfReports & 1 ) ? _T(' ') : mark );
-				InvalidateRect( g_hWnd, &minirect, 0 );
+				if( iMyId < 3 )
+				{
+					if( ti.wCycle ) {
+						_stprintf_s( ppszStatus[ 0 + iMyId * 4 ], cchStatus,
+								_T( "Target #%d [ %s @ %u ms ] %c" ),
+								iMyId < 3 ? iMyId + 1 : iMyId,
+								GetPercentageString( g_Slider[ iMyId ], percent, _countof(percent) ), // 20140317
+								msUnit,
+								( numOfReports & 1 ) ? _T(' ') : BLINKING_CHAR );
+					} else {
+						_stprintf_s( ppszStatus[ 0 + iMyId * 4 ], cchStatus,
+								_T( "Target #%d [ %s ] %c" ),
+								iMyId < 3 ? iMyId + 1 : iMyId,
+								GetPercentageString( g_Slider[ iMyId ], percent, _countof(percent) ), // 20140317
+								( numOfReports & 1 ) ? _T(' ') : BLINKING_CHAR );
+					}
+					InvalidateRect( g_hWnd, &minirect, 0 );
+				}
 				++numOfReports;
+
+#if 0 //def _DEBUG
+				_stprintf_s(msg,_countof(msg),_T("slider=%d: Red=%lu Green=%lu"),
+					slider, TimeRed, TimeGreen );
+				WriteDebugLog(msg);
+#endif
 			}
 		}
 
 		for( i = 0; i < numOfThreads; ++i )
-		{
-			if( pThreadHandles[ i ] )
-				CloseHandle( pThreadHandles[ i ] );
-		}
+			if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
 
-		HeapFree( GetProcessHeap(), 0L, pThreadHandles );
-		HeapFree( GetProcessHeap(), 0L, pThreadIDs );
+		HeapFree( GetProcessHeap(), 0, pThreadHandles );
+		HeapFree( GetProcessHeap(), 0, pThreadIDs );
 	}
 
-	_tcscpy_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus, _T( "* Unlimited *" ) );
+	if( iMyId < 3 )
+		_tcscpy_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus, _T( "* Unlimited *" ) );
 
 	if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, (LONG *) NULL ) )
 	{
 		_stprintf_s( msg, _countof(msg),
-					_T( "* Target #%d : ReleaseSemaphore in Hack()" ), iMyId + 1 );
-		WriteDebugLog( msg );
+					_T( "* Target #%d : ReleaseSemaphore in Hack()" ), iMyId < 3 ? iMyId + 1 : iMyId );
 	}
 	else
 	{
 		_stprintf_s( msg, _countof(msg),
 					_T( "[!] Target #%d : ReleaseSemaphore failed in Hack(): ErrCode %lu" ),
-					iMyId + 1, GetLastError() );
-		WriteDebugLog( msg );
+					iMyId < 3 ? iMyId + 1 : iMyId,
+					GetLastError() );
 	}
+	WriteDebugLog( msg );
 
-	const BOOL bPriRestored = SetPriorityClass( hProcess, dwOldPriority );
-	WriteDebugLog( bPriRestored ? _T( "Set dwOldPriority: OK" ) : _T( "Set dwOldPriority: Failed" ) );
-	CloseHandle( hProcess );
+	if( bPrioritySet )
+	{
+		BOOL bPriorityRestored = SetPriorityClass( hProcess, dwOldPriority );
+		WriteDebugLog( bPriorityRestored ? _T("Set dwOldPriority: OK")
+										: _T("Set dwOldPriority: Failed") );
+	}
+	if( hProcess )
+		CloseHandle( hProcess );
 
-	ppszStatus[ 3 + iMyId * 4 ][ 0 ] = _T('\0');
+	if( iMyId < 3 )
+		ppszStatus[ 3 + iMyId * 4 ][ 0 ] = _T('\0');
 
 	if( hToken )
 	{
-		if( bPriv ) 
-			SetDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
-
+		if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
 		CloseHandle( hToken );
 	}
 	
@@ -710,31 +921,30 @@ OutputDebugString(s);
 
 TCHAR * GetPercentageString( LRESULT lTrackbarPos, TCHAR * lpString, size_t cchString )
 {
-	if( 1 <= lTrackbarPos && lTrackbarPos <= 99 )
+	*lpString = _T('\0');
+
+	if( SLIDER_MIN <= lTrackbarPos && lTrackbarPos <= 99 )
 	{
 #ifdef _UNICODE
-		swprintf_s( lpString, cchString, L"\x2212 %2ld%%", lTrackbarPos );
+		swprintf_s( lpString, cchString, L"\x2212 %2d%%", (int) lTrackbarPos );
 #else
-		sprintf_s( lpString, cchString, "- %2ld%%", lTrackbarPos );
+		sprintf_s( lpString, cchString, "- %2d%%", (int) lTrackbarPos );
 #endif
 	}
 #if ALLOW100
 	else if( lTrackbarPos == SLIDER_MAX )
 	{
 # ifdef _UNICODE
-		swprintf_s( lpString, cchString, L"\x2212 %2ld%%", 100L );
+		swprintf_s( lpString, cchString, L"\x2212 %2d%%", 100 );
 # else
-		sprintf_s( lpString, cchString, "- %2ld%%", 100L );
+		sprintf_s( lpString, cchString, "- %2d%%", 100 );
 # endif
 	}
 #endif
-	else
+	else if( 100 <= lTrackbarPos && lTrackbarPos <= SLIDER_MAX )
 	{
-		double d = 0.0;
-		if( 100 <= lTrackbarPos && lTrackbarPos <= SLIDER_MAX )
-		{
-			d = 99.0 + ( lTrackbarPos - 99L ) * 0.1;
-		}
+		double d = 99.0 + ( lTrackbarPos - 99 ) * 0.1;
+
 #ifdef _UNICODE
 		swprintf_s( lpString, cchString, L"\x2212 %4.1f%%", d );
 #else
@@ -747,18 +957,27 @@ TCHAR * GetPercentageString( LRESULT lTrackbarPos, TCHAR * lpString, size_t cchS
 
 
 
-static inline BOOL SetSliderText( HWND hDlg, int iControlId, LONG lPercentage )
+static BOOL SetSliderText( HWND hDlg, int iControlId, LONG lPercentage )
 {
 	TCHAR strPercent[ 32 ];
 	
 	return SetDlgItemText( hDlg, iControlId, 
 							GetPercentageString( lPercentage, strPercent, _countof(strPercent) ) );
 }
+static void EnableDlgItem( HWND hDlg, int iControlId, BOOL bEnable )
+{
+	HWND hwndCtrl = GetDlgItem( hDlg, iControlId );
+	
+	// If the control to be disabled has focus, re-focus IDOK now
+	if( ! bEnable && GetFocus() == hwndCtrl )
+		SendMessage( hDlg, WM_NEXTDLGCTL, (WPARAM) GetDlgItem( hDlg, IDOK ), TRUE );
+	
+	EnableWindow( hwndCtrl, bEnable );
+}
 
+//#define SliderMoved(wParam)     (LOWORD(wParam)!=TB_ENDTRACK)
 
-#define SliderMoved(wParam)     (LOWORD(wParam)!=TB_ENDTRACK)
-
-static void _settings_init( HWND hDlg )
+static void _settings_init( HWND hDlg, TARGETINFO * ti )
 {
 	const bool fAllowMoreThan99 = 
 				!!( MF_CHECKED & GetMenuState( GetMenu( g_hWnd ), 
@@ -768,16 +987,35 @@ static void _settings_init( HWND hDlg )
 	TCHAR tmpstr[ 32 ];
 	for( int i = 0; i < 3; i++ )
 	{
-		SetDlgItemText( hDlg, IDC_EDIT_TARGET1 + i, g_szTarget[ i ] );
+		const TCHAR * path = ti[ i ].disp_path ? ti[ i ].disp_path
+									: ti[ i ].lpPath ? ti[ i ].lpPath
+									: TARGET_UNDEF ;
+#if 0 //20160922
+		if( i == 2 && g_bHack[ 3 ] )
+		{
+			TCHAR szText[ CCHPATH + 20 ];
+			_sntprintf_s( szText, _countof(szText), _TRUNCATE, _T("%s (Watching)"), path );
+			SetDlgItemText( hDlg, IDC_EDIT_TARGET1 + 2, szText );
+
+		SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + 2, TEXT( "(Watching)" ) );
+		EnableDlgItem( hDlg, IDC_BUTTON_STOP1 + 2, FALSE );
+		EnableDlgItem( hDlg, IDC_SLIDER1 + 2, TRUE );
+		EnableDlgItem( hDlg, IDC_TEXT_PERCENT1 + 2, TRUE );
+		}
+		else
+#endif
+		{
+			SetDlgItemText( hDlg, IDC_EDIT_TARGET1 + i,	path );
 		_stprintf_s( tmpstr, _countof(tmpstr), _T( "%s #&%d" ),
 					g_bHack[ i ] ? _T( "Unlimit" ) : _T( "Limit" ), i + 1 );
 		SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + i, tmpstr );
-		EnableWindow( GetDlgItem( hDlg, IDC_BUTTON_STOP1 + i ), 
-						( g_dwTargetProcessId[ i ] != TARGET_PID_NOT_SET ) );
-		EnableWindow( GetDlgItem( hDlg, IDC_SLIDER1 + i ), 
-						( g_dwTargetProcessId[ i ] != TARGET_PID_NOT_SET ) );
-		EnableWindow( GetDlgItem( hDlg, IDC_TEXT_PERCENT1 + i ), 
-						( g_dwTargetProcessId[ i ] != TARGET_PID_NOT_SET ) );
+		EnableDlgItem( hDlg, IDC_BUTTON_STOP1 + i, 
+						( ti[ i ].dwProcessId != TARGET_PID_NOT_SET ) );
+		EnableDlgItem( hDlg, IDC_SLIDER1 + i, 
+						( ti[ i ].dwProcessId != TARGET_PID_NOT_SET ) );
+		EnableDlgItem( hDlg, IDC_TEXT_PERCENT1 + i, 
+						( ti[ i ].dwProcessId != TARGET_PID_NOT_SET ) );
+		}
 
 		SendDlgItemMessage( hDlg, IDC_SLIDER1 + i, TBM_SETRANGE, TRUE, MAKELONG( SLIDER_MIN, iMax ) );
 		SendDlgItemMessage( hDlg, IDC_SLIDER1 + i, TBM_SETPAGESIZE, 0, 5 );
@@ -786,14 +1024,15 @@ static void _settings_init( HWND hDlg )
 		SendDlgItemMessage( hDlg, IDC_SLIDER1 + i, TBM_SETPOS, TRUE, iSlider );
 		SetSliderText( hDlg, IDC_TEXT_PERCENT1 + i , iSlider );
 	}
-
-	if( g_dwTargetProcessId[ 2 ] == (DWORD) -1 || g_bHack[ 3 ] )
+#if 0
+	if( /*g_dwTargetProcessId[ 2 ] == (DWORD) -1 ||*/ g_bHack[ 3 ] )
 	{
 		SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + 2, TEXT( "(Watching)" ) );
 		EnableWindow( GetDlgItem( hDlg, IDC_BUTTON_STOP1 + 2 ), FALSE );
+		EnableWindow( GetDlgItem( hDlg, IDC_SLIDER1 + 2 ), TRUE );
 		EnableWindow( GetDlgItem( hDlg, IDC_TEXT_PERCENT1 + 2 ), TRUE );
 	}
-
+#endif
 	if( !( UNIT_MIN <= g_uUnit && g_uUnit <= UNIT_MAX ) ) g_uUnit = UNIT_DEF;
 	SetDlgItemInt( hDlg, IDC_EDIT_UNIT, g_uUnit, FALSE );
 
@@ -802,8 +1041,7 @@ static void _settings_init( HWND hDlg )
 
 INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 {
-	static LPTSTR * ppszStatus = NULL;
-	static TCHAR * lpszWindowText = NULL;
+	static TARGETINFO * ti = NULL;
 	static HFONT hfontNote = NULL;
 	static HFONT hfontPercent = NULL;
 	static HFONT hfontUnit = NULL;
@@ -812,15 +1050,15 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 	{
 		case WM_INITDIALOG:
 		{
-			lpszWindowText = (TCHAR*) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, MAX_WINDOWTEXT * sizeof(TCHAR) );
-			if( ! lParam || ! lpszWindowText )
+			TCHAR szWindowText[ MAX_WINDOWTEXT ] = _T("");
+			if( ! lParam )
 			{
-				EndDialog( hDlg, FALSE ); // lpszWindowText won't memory-leak
+				EndDialog( hDlg, FALSE );
 				break;
 			}
 			g_hSettingsDlg = hDlg;
 
-			ppszStatus = (TCHAR**) lParam;
+			ti = (TARGETINFO*) lParam;
 			
 			HDC hDC = GetDC( hDlg );
 			hfontPercent = MyCreateFont( hDC, TEXT( "Verdana" ), 12, TRUE, FALSE );
@@ -832,29 +1070,26 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					IS_JAPANESEo ? S_JPNo_1002 : S_JPN_1002,
-					-1, lpszWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpszWindowText );
+					-1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_FRENCH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					S_FRE_1002,
-					-1, lpszWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpszWindowText );
+					-1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_SPANISH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					S_SPA_1002,
-					-1, lpszWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpszWindowText );
+					-1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else
 #endif
 			{
-				_tcscpy_s( lpszWindowText, MAX_WINDOWTEXT, _T( "Limiter control" ) );
-				SetWindowText( hDlg, lpszWindowText );
+				_tcscpy_s( szWindowText, MAX_WINDOWTEXT, _T( "Limiter control" ) );
 			}
+			SetWindowText( hDlg, szWindowText );
 
 			for( int i = 0; i < 3; i++ )
 			{
@@ -895,7 +1130,7 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 			);
 #endif
 
-			_settings_init( hDlg );
+			_settings_init( hDlg, ti );
 			break;
 		}
 
@@ -955,12 +1190,15 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 		
 		case WM_HSCROLL:
 		{
-			if( ! SliderMoved( wParam ) || ! ppszStatus )
-				break;
-
 			const int id = GetDlgCtrlID( (HWND) lParam );
 			const int k = id - IDC_SLIDER1;
-			if( 0 <= k && k <= 2 )
+			if( k < 0 || 2 < k || TB_ENDTRACK < LOWORD( wParam ) || ! ppszStatus ) break;
+
+			if( LOWORD( wParam ) == TB_ENDTRACK )
+			{
+				SendNotifyIconData( g_hWnd, ti, NIM_MODIFY );
+			}
+			else
 			{
 				LRESULT lSlider = SendMessage( (HWND) lParam, TBM_GETPOS, 0, 0 );
 				if( lSlider < SLIDER_MIN || lSlider > SLIDER_MAX )
@@ -968,12 +1206,12 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 
 				g_Slider[ k ] = (int) lSlider;
 
-				TCHAR strPercent[ 32 ] = _T("");
+				TCHAR strPercent[ 16 ] = _T("");
 				GetPercentageString( lSlider, strPercent, _countof(strPercent) );
 				SetDlgItemText( hDlg, IDC_TEXT_PERCENT1 + k, strPercent );
 				
 				if( g_bHack[ k ]
-					&& ( k < 2 || k == 2 && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE ) )
+					/*&& ( k < 2 || k == 2 && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE )*/ )
 				{
 					_stprintf_s( ppszStatus[ 0 + 4 * k ], cchStatus,
 								_T( "Target #%d [ %s ]" ),
@@ -1006,15 +1244,18 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 				case IDC_BUTTON_STOP3:
 				{
 					const int k = id - IDC_BUTTON_STOP1;
-					const bool fActivate = ! g_bHack[ k ]; // new state when toggled
+					const bool fLimit = ! g_bHack[ k ]; // new state after toggled
 					TCHAR strBtnText[ 32 ] = _T("");
 					_stprintf_s( strBtnText, _countof(strBtnText),
 								_T("%s #&%d"),
-								fActivate ? _T("Unlimit") : _T("Limit"),
+								fLimit ? _T("Unlimit") : _T("Limit"),
 								k + 1 );
+					
+					if( fLimit ) // WM_USER_RESTART gets sema on its own
+						SendMessage( g_hWnd, WM_USER_RESTART, (WPARAM) k, 0 );
+					else
+						SendMessage( g_hWnd, WM_USER_STOP, (WPARAM) k, STOPF_UNLIMIT );
 
-					// WM_USER_RESTART gets sema on its own
-					SendMessage( g_hWnd, fActivate ? WM_USER_RESTART : WM_USER_STOP, (WPARAM) k, 0 );
 					SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + k, strBtnText );
 					break;
 				}
@@ -1039,7 +1280,7 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 			}
 			break; // <-- fixed @ 1.1 beta3
 		}
-
+/**
 		case WM_GETICON:
 		case WM_USER_CAPTION:
 		{
@@ -1071,10 +1312,26 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 			return FALSE;
 			break;
 		}
-
+**/
 		case WM_USER_REFRESH:
-			_settings_init( hDlg );
+		{
+			if( lParam == WM_KILLFOCUS
+				&&
+				( wParam < 3 && ti[ wParam ].dwProcessId || wParam == 2 && g_bHack[ 3 ] )
+			)
+			{
+				LRESULT slider
+					= SendDlgItemMessage( hDlg, IDC_SLIDER1 + (int) wParam, TBM_GETPOS, 0, 0 );
+				const TCHAR * q = ti[ wParam ].disp_path;
+				if( ! q ) q = ti[ wParam ].lpPath;
+				SetSliderIni( q, slider );
+			}
+			else
+			{
+				_settings_init( hDlg, ti );
+			}
 			break;
+		}
 		
 		case WM_DESTROY:
 		{
@@ -1094,16 +1351,16 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 									(WPARAM)(HFONT) NULL, MAKELPARAM( FALSE, 0 ) );
 
 				UnsetSubclass( hDlg, IDC_SLIDER1 + i, PrevTrackbarProc[ i ] );
-
+#if 0
 				if( g_dwTargetProcessId[ i ] != TARGET_PID_NOT_SET )
 				{
-					TCHAR buf[ CCHPATHEX + 100 ];
 #ifdef _DEBUG
+					TCHAR buf[ CCHPATHEX + 100 ];
 					_stprintf_s( buf, _countof(buf), _T( "g_Slider[ %d ] = %d : %s" ),
-									i, g_Slider[ i ], g_szTarget[ i ] );
+									i, g_Slider[ i ], lphp[ i ].lpTarget->szPath/*g_szTarget[ i ]*/ );
 					WriteDebugLog( buf );
 #endif
-					_tcscpy_s( buf, _countof(buf), g_szTarget[ i ] );
+					/*_tcscpy_s( buf, _countof(buf), g_szTarget[ i ] );
 					
 					if( i == 2 && g_dwTargetProcessId[ 2 ] == WATCHING_IDLE )
 					{
@@ -1113,12 +1370,12 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 						{
 							buf[ len - 11 ] = _T('\0');
 						}
-					}
+					}*/
 					
-					SetSliderIni( buf, g_Slider[ i ] );
+					SetSliderIni( lphp[ i ].lpTarget->szExe/*buf*/, g_Slider[ i ] );
 				}
+#endif		
 			}
-			
 			if( hfontNote )
 			{
 				SendDlgItemMessage( hDlg, IDC_EDIT_NOTE, WM_SETFONT,
@@ -1134,11 +1391,11 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 				hfontPercent = NULL;
 			}
 
-			if( lpszWindowText )
+			/*if( lpszWindowText )
 			{
 				HeapFree( GetProcessHeap(), 0L, lpszWindowText );
 				lpszWindowText = NULL;
-			}
+			}*/
 			
 			break;
 		}
@@ -1175,8 +1432,8 @@ BOOL Unfreeze( HWND hWnd, DWORD dwProcessID )
 					numOfThreads != 1 ? _T("s") : _T("") );
 
 	HANDLE hToken = NULL;
-	DWORD dwPrevAttributes = 0L;
-	BOOL bPriv = EnableDebugPrivilege( &hToken, &dwPrevAttributes );
+	DWORD dwPrevAttributes = 0;
+	BOOL bPrivilege = EnableDebugPrivilege( &hToken, &dwPrevAttributes );
 
 	for( ptrdiff_t i = 0; i < numOfThreads; ++i )
 	{
@@ -1237,9 +1494,7 @@ BOOL Unfreeze( HWND hWnd, DWORD dwProcessID )
 
 	if( hToken )
 	{
-		if( bPriv ) 
-			SetDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
-
+		if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
 		CloseHandle( hToken );
 	}
 
@@ -1251,19 +1506,20 @@ BOOL Unfreeze( HWND hWnd, DWORD dwProcessID )
 }
 
 
-
+#define SURROGATE_HI( wc ) ( L'\xD800' <= wc && wc <= L'\xDBFF' ) // leading
+#define SURROGATE_LO( wc ) ( L'\xDC00' <= wc && wc <= L'\xDFFF' ) // trailing
 /*
 0123456789012345678901234567890123456789012345678 (cchOriginal=48)
 dddddddddd~D      SsssssssssssssssssssssssssssssZ (cchToMove=31) D=dst, S=src
 C:\Program Files\mozilla.org\Mozilla\mozilla.exe
 */
-
-VOID AdjustLength( LPTSTR strPath )
+#if 0
+static void AdjustLength( TCHAR * szPath, size_t cchOriginal )
 {
-	const size_t cchOriginal = _tcslen( strPath );
-	if( 45 < cchOriginal )
+	//const size_t cchOriginal = _tcslen( szPath );
+	//if( 45 < cchOriginal )
 	{
-		TCHAR * dst = strPath + ( SURROGATE_LO( strPath[ 10 ] ) ? 11 : 10 );
+		TCHAR * dst = strPath + ( SURROGATE_LO( szPath[ 10 ] ) ? 11 : 10 );
 #ifdef _UNICODE
 		*dst++ = L'\x2026'; // 'HORIZONTAL ELLIPSIS' (U+2026)
 #else
@@ -1273,9 +1529,27 @@ VOID AdjustLength( LPTSTR strPath )
 #endif
 
 		// Including +1 for term NUL
-		const size_t cchToMove = (size_t)( SURROGATE_LO( strPath[ cchOriginal - 30 ] ) ? 32 : 31 );
-		const TCHAR * src = strPath + cchOriginal - ( cchToMove - 1 ); // -1 to include NUL
+		size_t cchToMove = (size_t)( SURROGATE_LO( szPath[ cchOriginal - 30 ] ) ? 32 : 31 );
+		const TCHAR * src = szPath + cchOriginal - ( cchToMove - 1 ); // -1 to include NUL
 		memmove( dst, src, cchToMove * sizeof(TCHAR) );
+	}
+}
+#endif
+
+void SetLongStatusText( const TCHAR * szText, TCHAR * pszStatus )
+{
+	size_t cchOriginal = _tcslen( szText );
+	if( cchOriginal <= 45 ) _tcscpy_s( pszStatus, cchStatus, szText );
+	else
+	{
+		const TCHAR * tail = &szText[ cchOriginal - 30 ];
+#ifdef _UNICODE
+		int icchHead = ( SURROGATE_LO( szText[ 10 ] ) ) ? 11 : 10 ;
+		if( SURROGATE_LO( *tail ) ) --tail;
+		swprintf_s( pszStatus, cchStatus, L"%.*s\x2026%s", icchHead, szText, tail );
+#else
+		sprintf_s( pszStatus, cchStatus, "%.10s...%s", szText, tail );
+#endif
 	}
 }
 
@@ -1330,14 +1604,19 @@ typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
 																	 DWORD,PTOKEN_PRIVILEGES,PDWORD);
 extern LookupPrivilegeValue_t g_pfnLookupPrivilegeValue;
 extern AdjustTokenPrivileges_t g_pfnAdjustTokenPrivileges;
-BOOL SetDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes )
-{
-	WriteDebugLog( bEnable? _T( "SetDebugPrivilege TRUE" ) : _T( "SetDebugPrivilege FALSE" ) );
+extern bool g_fLowerPriv;
 
-//	if( pPrevAttributes )
-//		*pPrevAttributes = 0L;//--20131015
+DWORD AdjustDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes ) // WAS: SetDebugPrivilege
+{
+	if( g_fLowerPriv )
+		return ERROR_SERVICE_DISABLED;
+
 	
-	BOOL bRet = FALSE;
+	WriteDebugLog( bEnable? _T( "AdjustDebugPrivilege: Enabling..." ) : _T( "AdjustDebugPrivilege: Disabling..." ) );
+
+
+//BOOL bRet = FALSE;
+	DWORD dwErr = 0L;
 	DWORD dwPrevAttributes = 0L;
 
 	LUID Luid;
@@ -1365,58 +1644,95 @@ BOOL SetDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes )
 		tp.Privileges[ 0 ].Attributes = dwNewAttributes;
 
 		TOKEN_PRIVILEGES tpPrev = {0};
+		tpPrev.PrivilegeCount = 1;
+		DWORD BufferLength = sizeof(tpPrev);
+		DWORD ReturnLength = 0;
+		BOOL b0 = 0;
+		UINT situation = 0; // test
 
-		DWORD cbPrev;
-		
-		SetLastError( 0L );
-		(*g_pfnAdjustTokenPrivileges)( hToken, FALSE, &tp, (DWORD) sizeof(tpPrev), &tpPrev, &cbPrev );
-		
+		SetLastError( 0 );
+		b0 = (*g_pfnAdjustTokenPrivileges)( hToken, FALSE, &tp, BufferLength, &tpPrev, &ReturnLength );
+		dwErr = GetLastError();
+
+		// In theory, this could happen
+		if( BufferLength < ReturnLength )
+		{
+			situation |= 1;
+			
+			BufferLength = ReturnLength;
+			TOKEN_PRIVILEGES * lpTP = (TOKEN_PRIVILEGES *)
+									HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, BufferLength );
+			if( lpTP )
+			{
+				lpTP->PrivilegeCount
+					= (DWORD)( (BufferLength - sizeof(DWORD)) / sizeof(LUID_AND_ATTRIBUTES) );
+				SetLastError( 0 );
+				b0 = (*g_pfnAdjustTokenPrivileges)( hToken, FALSE, &tp, 0, NULL, NULL );
+				dwErr = GetLastError();
+			
+				tpPrev.PrivilegeCount = lpTP->PrivilegeCount;
+				tpPrev.Privileges[ 0 ] = lpTP->Privileges[ 0 ];
+				MemFree( lpTP );
+			}
+			else
+			{
+				situation |= 2;
+
+				BufferLength = 0;
+				SetLastError( 0 );
+				b0 = (*g_pfnAdjustTokenPrivileges)( hToken, FALSE, &tp, BufferLength, NULL, NULL );
+				dwErr = GetLastError();
+			}
+		}
+
 		// ret.val. of Adjust itself is not reliable; we need to do this...
-		bRet = ( GetLastError() == ERROR_SUCCESS );
+		//bRet = ( dwErr == ERROR_SUCCESS );
 
-#ifdef _DEBUG
+///#ifdef _DEBUG
 		TCHAR s[200];
 		_stprintf_s(s,200,
-			_T("TID%08lX [Enable=%d] Attr %08lX [prev=%08lX](cb=%d) to %08lX (result=%lu err=%lu bRet=%d)\n"),
+			_T("0x%x [Enable=%d] Attr %lX to %lX: prev=%lX ReturnLength=%lu/%lu")
+			_T(": PrivilegeCount=%lu err=%lu b0=%d situation=%u"),
 			GetCurrentThreadId(),
 			bEnable,
 			dwPrevAttributes,
-			tpPrev.Privileges[0].Attributes,
-			cbPrev,
 			dwNewAttributes,
+				tpPrev.Privileges[0].Attributes,
+				ReturnLength,
+				BufferLength,
 			tpPrev.PrivilegeCount,
-			GetLastError(),
-			bRet);
-		OutputDebugString(s);
-#endif
+			dwErr,
+			b0,
+			situation);
+		WriteDebugLog(s);
+///#endif
 	}
 
 	if( pPrevAttributes )
 		*pPrevAttributes = dwPrevAttributes;
 
-	if( bRet )
+	if( dwErr == ERROR_SUCCESS )
 		WriteDebugLog( _T( "Success!" ) );
 
-	return bRet;
+	return dwErr;
 }
 
 typedef BOOL (WINAPI *OpenThreadToken_t)(HANDLE,DWORD,BOOL,PHANDLE);
 typedef BOOL (WINAPI *ImpersonateSelf_t)(SECURITY_IMPERSONATION_LEVEL);
 extern OpenThreadToken_t g_pfnOpenThreadToken;
 extern ImpersonateSelf_t g_pfnImpersonateSelf;
+
+
 BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes )
 {
 	if( ! phToken || ! g_pfnOpenThreadToken || ! g_pfnImpersonateSelf )
 		return FALSE;
 
-	BOOL bPriv = FALSE; // ret val
+	BOOL bPrivilege = FALSE; // ret val
+	TCHAR tmpstr[ 256 ];
 
-	SetLastError( 0L );
-	BOOL bToken = (*g_pfnOpenThreadToken)(
-						GetCurrentThread(), 
-						TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
-						TRUE,
-						phToken );
+	SetLastError( 0 );
+	BOOL bToken = (*g_pfnOpenThreadToken)( GetCurrentThread(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, TRUE, phToken );
 	if( bToken )
 	{
 		WriteDebugLog( _T( "OpenThreadToken OK" ) );
@@ -1429,36 +1745,47 @@ BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes )
 		}
 		else
 		{
-			TCHAR tmpstr[ 100 ];
-			_stprintf_s( tmpstr, _countof(tmpstr),
-						_T("OpenThreadToken failed, Error Code %lu"), GetLastError() );
+			_stprintf_s( tmpstr, _countof(tmpstr), _T("OpenThreadToken failed, Error Code %lu"), GetLastError() );
 			WriteDebugLog( tmpstr );
 		}
+
+
 		
 		if( (*g_pfnImpersonateSelf)( SecurityImpersonation ) ) //++
 		{
-			bToken = (*g_pfnOpenThreadToken)( 
-								GetCurrentThread(), 
-								TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, FALSE, phToken );
+			WriteDebugLog( _T( "ImpersonateSelf OK" ) );
+			bToken = (*g_pfnOpenThreadToken)( GetCurrentThread(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, FALSE, phToken );
 		}
 		else
 		{
 			WriteDebugLog( _T( "ImpersonateSelf failed" ) );
 		}
+
 	}
 
 	if( bToken )
 	{
 		WriteDebugLog( _T( "OpenThreadToken OK" ) );
-		
-		bPriv = SetDebugPrivilege( *phToken, TRUE, pPrevAttributes );
-		WriteDebugLog( bPriv ? _T( "SetPrivilege OK" ) : _T( "SetPrivilege failed" ) );
+
+		DWORD dwErrorCode = AdjustDebugPrivilege( *phToken, TRUE, pPrevAttributes );
+
+		if( dwErrorCode == ERROR_SUCCESS )
+		{
+			WriteDebugLog( _T( "AdjustDebugPrivilege: OK" ) );
+			bPrivilege = TRUE;
+		}
+		else
+		{
+			_stprintf_s( tmpstr, _countof(tmpstr), _T("AdjustDebugPrivilege failed: Error code %lu"), dwErrorCode );
+			WriteDebugLog( tmpstr );
+			WriteDebugLog( _T( "Warning: did not get the debug privilege." ) );
+		}
 	}
 	else
 	{
 		*phToken = NULL;
 	}
 
-	return bPriv;
+	return bPrivilege;
 }
 

@@ -1,4 +1,16 @@
+/* 
+ *	Copyright (C) 2005-2017 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "list.h"
+static ptrdiff_t pid_has_this_path(
+	DWORD pid,
+	const PATHINFO * arPathInfo,
+	ptrdiff_t nPathInfo,
+	TCHAR ** ppPath );
 
 static BOOL BES_ShowWindow( HWND hDlg, HWND hwnd, int iShow )
 {
@@ -23,10 +35,9 @@ static BOOL BES_ShowWindow( HWND hDlg, HWND hwnd, int iShow )
 			
 		ShowWindow( hwnd, SW_SHOWDEFAULT );
 		BringWindowToTop( hwnd );
-		RECT rect;
+		RECT rect = {0};
 		GetWindowRect( hwnd, &rect );
-		RECT area;
-//		SystemParametersInfoW( SPI_GETWORKAREA, 0, &area, 0 );
+		RECT area = {0};
 		SystemParametersInfo( SPI_GETWORKAREA, 0, &area, 0 );
 		MoveWindow( hwnd, (int) area.left, (int) area.top, rect.right - rect.left, rect.bottom - rect.top, TRUE );
 		return TRUE;
@@ -85,7 +96,7 @@ static bool show_process_win_worker(
 
 	// It would be more efficient if we call BES_ShowWindow for each window directly from
 	// EnumProc, instead of once storing every window in a big array; however, BES_ShowWindow
-	// may show MessageBox and waiting long, while which the target windows may change,
+	// may show MessageBox and waiting long, during which the target windows may change,
 	// like disappear.  So it may be safer, though less efficient, to get a definitive snap
 	// first.
 	for( ptrdiff_t threadIndex = 0; threadIndex < numOfThreads; ++threadIndex )
@@ -109,7 +120,7 @@ static bool show_process_win_worker(
 
 static void ShowProcessWindow( HWND hDlg, DWORD dwProcessID, int iShow )
 {
-	WININFO * lpWinInfo = (WININFO*) HeapAlloc( GetProcessHeap(), 0, sizeof(WININFO) );
+	WININFO * lpWinInfo = (WININFO *) MemAlloc( sizeof(WININFO), 1 );
 	if( lpWinInfo )
 	{
 		ptrdiff_t numOfThreads = 0;
@@ -195,212 +206,177 @@ static const PROCESS_THREAD_PAIR * _find_pid( DWORD pid, const PROCESS_THREAD_PA
 }
 */
 
-BOOL PathToExe( LPCTSTR strPath, LPTSTR lpszExe, int iBufferSize )
+void PathToExe( const TCHAR * pszPath, TCHAR * pszExe, rsize_t cchExe )
 {
-	if( ! strPath || ! lpszExe )
-		return FALSE;
-
-	if( (int) _tcslen( strPath ) >= iBufferSize )
-		return FALSE;
-
-	_tcscpy_s( lpszExe, (rsize_t) iBufferSize, strPath );
-	return PathToExe( lpszExe );
+	const TCHAR * pBkSlash = _tcsrchr( pszPath, _T('\\') );
+	_tcscpy_s( pszExe, cchExe, (pBkSlash && pBkSlash[ 1 ]) ? pBkSlash + 1 : pszPath );
 }
 
-BOOL PathToExe( LPTSTR strPath )
+CLEAN_POINTER DWORD * PathToProcessIDs( const PATHINFO& pathInfo, ptrdiff_t& numOfPIDs )
 {
-	if( ! strPath )
-		return FALSE;
-	/*
-	C:\path\to\some.exeZ
-	1234567890123456789  : len = 19
-	012345678901234567*  : strPath[ i ] for i = len - 1 = 18
-	0123456789*          : strPath[ 10 ] == _T('\\') --> i = 10
-	           123456789 : cchToCopy = len - i  = 19 - 10 = 9 (incl. term NUL)
+	numOfPIDs = 0;
 	
-	
-	*/
+	DWORD * arPIDs = (DWORD *) MemAlloc( sizeof(DWORD), MAX_SLOTS );
+	if( ! arPIDs ) return NULL;
 
-  	/*int len = (int) _tcslen( strPath );
-	for( int i = len - 1; i >= 0; i-- )
+	if( pathInfo.cchPath )
 	{
-		if( strPath[ i ] == TEXT( '\\' ) )
+		HANDLE hProcessSnap = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
+		if( hProcessSnap != INVALID_HANDLE_VALUE )
 		{
-			//lstrcpy( strPath, &strPath[ i + 1 ] ); // @fix 20111207
-			memmove( strPath, &strPath[ i + 1 ], (size_t)( len - i ) * sizeof(TCHAR) );
-			break;
-		}
-	}*/
-	//OutputDebugStringW(L"\r\n[in] ");
-	//OutputDebugStringW(strPath);
-	const TCHAR * pntr = _tcsrchr( strPath, _T('\\') );
-	if( pntr )
-		memmove( strPath, pntr + 1, ( _tcslen( pntr + 1 ) + 1 ) * sizeof(TCHAR) );
+			PROCESSENTRY32 pe32;
+			pe32.dwSize = sizeof( PROCESSENTRY32 );
 
-	//OutputDebugStringW(L"\r\n[out] ");
-	//OutputDebugStringW(strPath);
-	//OutputDebugStringW(L"\r\n");
-	return TRUE;
+			for( BOOL bGoOn = Process32First( hProcessSnap, &pe32 );
+					bGoOn && numOfPIDs < MAX_SLOTS;
+					bGoOn = Process32Next( hProcessSnap, &pe32 ) )
+			{
+				if( pid_has_this_path( pe32.th32ProcessID, &pathInfo, 1, NULL ) != -1 )
+					arPIDs[ numOfPIDs++ ] = pe32.th32ProcessID;
+			} // for(bGoOn)
+			
+			CloseHandle( hProcessSnap );
+		} // hProcessSnap OK
+	}
+
+	return arPIDs;
 }
 
+typedef struct tagFoundPID {
+	TCHAR * lpPath;
+	ptrdiff_t index;
+	DWORD pid;
+	int slot;
+} FOUNDPID;
 
-BOOL PathToExeEx( LPTSTR strPath, int iBufferSize )
+CLEAN_POINTER FOUNDPID * FindPIDs(
+	const PATHINFO * arPathInfo,
+	ptrdiff_t nPathInfo,
+	const DWORD * pdwExcluded,
+	ptrdiff_t nExcluded,
+	ptrdiff_t& numOfPIDs )
 {
-	if( ! PathToExe( strPath ) )
-		return FALSE;
-	int len = (int) _tcslen( strPath );
-	if( iBufferSize <= len + 8 ) return FALSE;
+	numOfPIDs = 0;
+	ptrdiff_t maxNumOfPIDs = 25;
+	bool fError = false;
+	FOUNDPID * arFound = (FOUNDPID *) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
+													sizeof(FOUNDPID) * (size_t) maxNumOfPIDs );
+	if( ! arFound ) return NULL;
 
-	if(
-		(int) _tcslen( strPath ) < 15 ||
-		Lstrcmpi( &strPath[ len - 4 ], _T( ".exe" ) ) == 0
-	)
+	HANDLE hProcessSnap = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
+	if( hProcessSnap != INVALID_HANDLE_VALUE )
 	{
-		return TRUE;
-	}
-/*
-c:\path\something.exZ
-12345678901234567890 len = 20
-01234567890123456*   len-3 = 17 --> used 17 cch not incl '.'
-*/
-		/*//lstrcpy( &strPath[ len - 3 ], TEXT( ".exe" ) );
-		_tcscpy_s( &strPath[ len - 3 ], (rsize_t)( iBufferSize - ( len - 3 ) ), _T(".exe") );
-		// If case-insensitive, strPath[len]=_T('e'),strPath[len+1]=_T('\0') would enough.*/
+		PROCESSENTRY32 pe32;
+		pe32.dwSize = sizeof( PROCESSENTRY32 );
 
-	int s = 0;
-	if(	Lstrcmpi( &strPath[ len - 3 ], _T(".ex") ) == 0 )
-	{
-		s = 3;
-	}
-	else if( strPath[ len - 2 ] == _T('.')
-				&& ( strPath[ len - 1 ] == _T('e') || strPath[ len - 1 ] == _T('E') ) )
-	{
-		s = 2;
-	}
-	else if( strPath[ len - 1 ] == _T('.') )
-	{
-		s = 1;
-	}
-
-	if( s )
-	{
-		--s;
-		_tcscpy_s( &strPath[ len - s ], (rsize_t)( iBufferSize - ( len - s ) ), _T("exe") );
-		return TRUE;
-	}
-
-/* @1.1b5 Will no longer do this
-	if
-	(
-		strPath[ len - 1 ] == TEXT( ' ' )
-	)
-	{
-		strPath[ len - 1 ] = TEXT( '\0' );
-	}
-*/
-
-	_tcscat_s( strPath, (rsize_t) iBufferSize, _T( "~.exe" ) );
-	return TRUE;
-}
-
-
-DWORD PathToProcessID( const TCHAR * pPath, const DWORD * pdwExcluded, ptrdiff_t nExcluded )
-{
-	if( ! pPath || CCHPATH <= _tcslen( pPath ) )
-	{
-		return (DWORD) -1;
-	}
-
-#if 1//def _UNICODE // ANSIFIX@20140307(4/5)
-	TCHAR szTargetLongPath[ CCHPATH ] = _T("");
-
-	DWORD dwResult1 = GetLongPathName( pPath, szTargetLongPath, CCHPATH );
-	if( dwResult1 == 0UL || CCHPATH <= dwResult1 )
-	{
-		// Use it as it is if GetLongPathName failed
-		_tcscpy_s( szTargetLongPath, _countof(szTargetLongPath), pPath );
-	}
-#else
-	char lpszTargetExe[ CCHPATH ] = "";
-	PathToExe( pPath, lpszTargetExe, CCHPATH );
-	const BOOL bLongExeName = ( strlen( lpszTargetExe ) > 15 );
-#endif
-
-	HANDLE hProcessSnap = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0UL );
-
-	if( hProcessSnap == INVALID_HANDLE_VALUE )
-	{
-		return (DWORD) -1;
-	}
-
-	PROCESSENTRY32 pe32;
-	pe32.dwSize = sizeof( PROCESSENTRY32 );
-	if( ! Process32First( hProcessSnap, &pe32 ) )
-	{
-	    CloseHandle( hProcessSnap );
-		return (DWORD) -1;
-	}
-
-	do
-	{
-		if( pdwExcluded )
+		for( BOOL bGoOn = Process32First( hProcessSnap, &pe32 );
+				bGoOn;
+				bGoOn = Process32Next( hProcessSnap, &pe32 ) )
 		{
-			ptrdiff_t j = 0;
+			const DWORD dwThisPID = pe32.th32ProcessID;
 			
-			for( ; j < nExcluded; ++j )
-			{
-				if( pe32.th32ProcessID == pdwExcluded[ j ] )
-					break;
-			}
+			ptrdiff_t n = 0;
+			while( n < nExcluded && dwThisPID != pdwExcluded[ n ] ) ++n;
+			if( n < nExcluded ) continue; // exclude this PID
 			
-			if( j < nExcluded )
-				continue;
-		}
-		
-		HANDLE hProcess = OpenProcess( PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-										FALSE, pe32.th32ProcessID );
-		if( hProcess != NULL ) 
-		{
-#if 1//def _UNICODE // ANSIFIX@20140307(5/5)
-			TCHAR szPath[ MAX_PATH * 2 ] = _T("");
-//+ 1.1 b5 -------------------------------------------------------------------
-			if( ProcessToPath( hProcess, szPath, MAX_PATH * 2 )
-				&&
-				Lstrcmpi( szTargetLongPath, szPath ) == 0 )
+			TCHAR * lpPath = NULL;
+			ptrdiff_t found_index = pid_has_this_path( dwThisPID, arPathInfo, nPathInfo, &lpPath );
+			if( found_index != -1 )
 			{
-				CloseHandle( hProcess );
-				CloseHandle( hProcessSnap );
-				return pe32.th32ProcessID;
-			}
-// ---------------------------------------------------------------------------
-#else
-			if( Lstrcmpi( lpszTargetExe, pe32.szExeFile ) == 0 )
-			{
-				CloseHandle( hProcess );
-				CloseHandle( hProcessSnap );
-				return pe32.th32ProcessID;
-			}
-
-			// fixed @ 1.1b5
-			if( bLongExeName )
-			{
-				if( _strnicmp( lpszTargetExe, pe32.szExeFile, 15 ) == 0 )
+				if( numOfPIDs == maxNumOfPIDs )
 				{
-					CloseHandle( hProcess );
-					CloseHandle( hProcessSnap );
-					return pe32.th32ProcessID;
+					if( MAX_SLOTS <= maxNumOfPIDs )
+					{
+						fError = true;
+						break;
+					}
+
+					LPVOID lpv = HeapReAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, arFound, 
+												sizeof(FOUNDPID) * (size_t)( maxNumOfPIDs * 2 ) );
+					if( ! lpv )
+					{
+						fError = true;
+						break;
+					}
+
+					arFound = (FOUNDPID *) lpv;
+					maxNumOfPIDs *= 2;
 				}
-			}
+#ifdef _DEBUG
+TCHAR s[1000];swprintf_s(s,1000,L"inde=%d, look=%s, found=%s\n",found_index,
+						 arPathInfo[found_index].pszPath,lpPath);
+OutputDebugString(s);
 #endif
-			CloseHandle( hProcess );
-		}
-	} while( Process32Next( hProcessSnap, &pe32 ) );
+				arFound[ numOfPIDs ].index = found_index;
+				arFound[ numOfPIDs ].pid = dwThisPID;
+				arFound[ numOfPIDs ].lpPath = lpPath;
+				++numOfPIDs;
+			}
+		} // for(bGoOn)
+		
+		CloseHandle( hProcessSnap );
+	} // hProcessSnap OK
 
-	CloseHandle( hProcessSnap );
 
-	return (DWORD) -1;
+	if( fError )
+	{
+		for( ptrdiff_t n = 0; n < numOfPIDs; ++n )
+			if( arFound[ n ].lpPath ) TcharFree( arFound[ n ].lpPath );
+		MemFree( arFound );
+		arFound = NULL;
+		numOfPIDs = 0;
+	}
+
+	return arFound;
 }
+#if 0
+DWORD PathToProcessID(
+	const PATHINFO * arPathInfo,
+	ptrdiff_t nPathInfo,
+	const DWORD * pdwExcluded,
+	ptrdiff_t nExcluded,
+	TCHAR ** ppPath,
+	ptrdiff_t * px
+)
+{
+	if( ppPath ) *ppPath = NULL;
+	if( px ) *px = -1;
 
+	if( ! arPathInfo ) return (DWORD) -1;
+
+	DWORD dwRetVal = (DWORD) -1;
+
+	HANDLE hProcessSnap = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
+	if( hProcessSnap != INVALID_HANDLE_VALUE )
+	{
+		PROCESSENTRY32 pe32;
+		pe32.dwSize = sizeof( PROCESSENTRY32 );
+
+		for( BOOL bGoOn = Process32First( hProcessSnap, &pe32 );
+				bGoOn && dwRetVal == (DWORD) -1;
+				bGoOn = Process32Next( hProcessSnap, &pe32 ) )
+		{
+			const DWORD dwThisPID = pe32.th32ProcessID;
+			
+			ptrdiff_t n = 0;
+			while( n < nExcluded && dwThisPID != pdwExcluded[ n ] ) ++n;
+			if( n < nExcluded ) continue; // exclude this PID
+			
+			ptrdiff_t found_index = pid_has_this_path( dwThisPID, arPathInfo, nPathInfo, ppPath );
+			if( found_index != -1 )
+			{
+				dwRetVal = dwThisPID;
+				if( px ) *px = found_index;
+			}
+		} // for(bGoOn)
+		
+		CloseHandle( hProcessSnap );
+	} // hProcessSnap OK
+
+	/*HeapFree( GetProcessHeap(), 0, lpszGivenPath );*/
+	return dwRetVal;
+}
+#endif
 typedef DWORD (WINAPI *GetProcessImageFileName_t)(HANDLE,LPTSTR,DWORD);
 typedef DWORD (WINAPI *GetLogicalDriveStrings_t)(DWORD,LPTSTR);
 typedef DWORD (WINAPI *QueryDosDevice_t)(LPCTSTR,LPTSTR,DWORD);
@@ -471,42 +447,61 @@ static BOOL DevicePathToDosPath( TCHAR * strBuffer, DWORD cchBuffer )
 	return FALSE;
 }
 
-static BOOL ProcessToPath( HANDLE hProcess, TCHAR * szPath, DWORD cchPath )
+static CLEAN_POINTER TCHAR * ProcessToPath_Alloc( HANDLE hProcess, size_t * pcch )
 {
-	if( ! szPath )
-		return FALSE;
+	if( pcch ) *pcch = 0;
+	size_t cch = 0;
 
-	TCHAR strFilePath[ MAX_PATH * 2 ] = _T("");
+	// NOTE: We can't handle a really long path here
+	TCHAR szBuffer[ CCHPATH ] = _T("");
+	TCHAR * lpszPath = NULL;
 
-	if( GetModuleFileNameEx( hProcess, NULL, strFilePath, _countof(strFilePath) )
-			&& strFilePath[ 0 ] != _T('\\')
+	if( GetModuleFileNameEx( hProcess, NULL, szBuffer, (DWORD) _countof(szBuffer) )
+			&& szBuffer[ 0 ] != _T('\\')
 		||
 		g_pfnGetProcessImageFileName != NULL
-			&& g_pfnGetProcessImageFileName( hProcess, strFilePath, (DWORD) _countof(strFilePath) )
-			&& DevicePathToDosPath( strFilePath, (DWORD) _countof(strFilePath) )
+			&& (*g_pfnGetProcessImageFileName)( hProcess, szBuffer, (DWORD) _countof(szBuffer) )
+			&& DevicePathToDosPath( szBuffer, (DWORD) _countof(szBuffer) )
 	)
 	{
-		DWORD dwResult = GetLongPathName( strFilePath, szPath, cchPath );
-		// Use whatever we have now if GetLongPathName failed
-		if( ! dwResult || cchPath <= dwResult )
+		size_t cchMem = _tcslen( szBuffer ) + 1;
+		lpszPath = TcharAlloc( cchMem );
+		if( ! lpszPath ) return NULL;
+		
+		cch = GetLongPathName( szBuffer, lpszPath, (DWORD) cchMem );
+
+		if( cchMem <= cch )
 		{
+//MessageBox(NULL,szBuffer,_T("Short Path!"),MB_ICONEXCLAMATION|MB_TOPMOST);
+			cchMem = cch + 1; // +1 just in case (not really needed)
+			TcharFree( lpszPath );
+			lpszPath = TcharAlloc( cchMem );
+			if( ! lpszPath ) return NULL;
+			cch = GetLongPathName( szBuffer, lpszPath, (DWORD) cchMem );
+		}
+
+		// Use whatever we have now if GetLongPathName failed
+		if( ! cch || cchMem <= cch )
+		{
+			// TODO: use GetLastError()##
 #ifndef _UNICODE
-			// strFilePath doesn't exist, probably because the actual path contains
+			// Path doesn't exist, probably because the actual path contains
 			// non-ACP characters and can not be expressed w/o Unicode
-			if( GetFileAttributes( strFilePath ) == INVALID_FILE_ATTRIBUTES )
+			if( GetFileAttributes( szBuffer ) == INVALID_FILE_ATTRIBUTES )
 			{
-				return FALSE;
+				//if( pdwErr ) *pdwErr = ERROR_NO_UNICODE_TRANSLATION;
+				HeapFree( GetProcessHeap(), 0, lpszPath );
+				return NULL;
 			}
 #endif
-			if( _tcslen( strFilePath ) < cchPath )
-				_tcscpy_s( szPath, cchPath, strFilePath );
-			else
-				return FALSE;
+			_tcsncpy_s( lpszPath, cchMem, szBuffer, _TRUNCATE );
+			cch = _tcslen( lpszPath );
 		}
-		return TRUE;
+
 	}
 
-	return FALSE;
+	if( pcch ) *pcch = cch;
+	return lpszPath;
 }
 
 
@@ -516,15 +511,14 @@ static BOOL ProcessToPath( HANDLE hProcess, TCHAR * szPath, DWORD cchPath )
 
 BOOL SaveSnap( HWND hWnd )
 {
-	TCHAR strPath[ MAX_PATH * 2 ] = TEXT( "snap.txt" );
-	OPENFILENAME ofn;
-	ZeroMemory( &ofn, sizeof( OPENFILENAME ) );
+	TCHAR strPath[ CCHPATH ] = TEXT( "snap.txt" );
+	OPENFILENAME ofn = {0};
 	ofn.lStructSize = sizeof( OPENFILENAME );
 	ofn.hwndOwner = hWnd;
-	ofn.lpstrFilter = TEXT( "Text file (*.txt)\0*.txt\0All files (*.*)\0*.*\0\0" );
+	ofn.lpstrFilter = TEXT( "Text File (*.txt)\0*.txt\0All Files\0*.*\0\0" );
 	ofn.nFilterIndex = 1L;
 	ofn.lpstrFile = strPath;
-	ofn.nMaxFile = MAX_PATH * 2L;
+	ofn.nMaxFile = CCHPATH;
 #ifdef _UNICODE
 	ofn.Flags = OFN_OVERWRITEPROMPT | OFN_ENABLESIZING | OFN_DONTADDTORECENT | OFN_HIDEREADONLY;
 #else
@@ -584,14 +578,10 @@ BOOL SaveSnap( LPCTSTR lpszSavePath )
 			FALSE, pe32.th32ProcessID );
 		if( hProcess != NULL ) 
 		{
-//#ifdef _UNICODE
-			TCHAR szPath[ MAX_PATH * 2 ] = _T("");
+			TCHAR * lpPath = ProcessToPath_Alloc( hProcess, NULL ); // ###
+			_ftprintf( fp, _T( "Full Path = %s\r\n" ), lpPath ? lpPath : _T("n/a") );
+			if( lpPath ) HeapFree( GetProcessHeap(), 0, lpPath );
 
-			if( ! ProcessToPath( hProcess, szPath, MAX_PATH * 2 ) )
-				_tcscpy_s( szPath, _countof(szPath), _T("n/a") );
-
-			_ftprintf( fp, _T( "Full Path = %s\r\n" ), szPath );
-//#endif
 			DWORD dwPriorityClass = GetPriorityClass( hProcess );
 			_ftprintf( fp, _T( "Process Priority = %lu\r\n" ), dwPriorityClass );
 			CloseHandle( hProcess );
@@ -636,7 +626,12 @@ BOOL SaveSnap( LPCTSTR lpszSavePath )
 
 	GetSystemTimeAsFileTime( &ft );
 	ULONGLONG rt1 = (ULONGLONG) ft.dwHighDateTime << 32 | (ULONGLONG) ft.dwLowDateTime;
+#if defined(_MSC_VER) && _MSC_VER < 1400
+	double cost = (__int64)( rt1 - rt0 ) / 10000000.0;
+#else
 	double cost = ( rt1 - rt0 ) / 10000000.0;
+#endif
+
 	_ftprintf( fp, _T( "Cost : %.3f seconds" ), cost );
 	fclose( fp );
 
@@ -688,7 +683,7 @@ static BOOL AppendMenu2( HMENU hMenu, HWND hDlg, int idCtrl, LPCTSTR strItem )
 	return AppendMenu( hMenu, flags, (UINT_PTR) idCtrl, strItem );
 }
 
-static void LV_OnContextMenu( HWND hDlg, HWND hLV, LPARAM lParam, int iff )
+static void LV_OnContextMenu( HWND hDlg, HWND hLV, LPARAM lParam, int iff, ptrdiff_t Sel )
 {
 	POINT pt = {0};
 //	pt.x = GET_X_LPARAM( lParam );
@@ -701,8 +696,6 @@ static void LV_OnContextMenu( HWND hDlg, HWND hLV, LPARAM lParam, int iff )
 	GetWindowRect( ListView_GetHeader( hLV ), &rcHeaderCtrl );
 	if( PtInRect( &rcHeaderCtrl, pt ) ) return;
 
-	const LRESULT Sel = ListView_GetCurrentSel( hLV );
-	if( Sel < 0 ) return;
 	ListView_EnsureVisible( hLV, Sel, FALSE ); // This may be needed on [Apps] OR [Shift]+[F10]
 	
 	// Don't let the popup menu hide the selected sel rect
@@ -784,33 +777,36 @@ static bool _always_list_all( void )
 
 #define strDefListBtn _T("List &all")
 #define strNondefListBtn _T("Norm&al list")
-static bool _is_list_button_def( HWND hDlg )
+/*static bool _is_list_button_def( HWND hDlg )
 {
 	TCHAR strBtn[ 32 ] = _T("");
-	GetDlgItemText( hDlg, IDC_LISTALL_SYS, strBtn, 32 );
+	GetDlgItemText( hDlg, IDC_LISTALL_SYS, strBtn, (int) _countof(strBtn) );
 	return ( _tcscmp( strBtn, strDefListBtn ) == 0 );
-}
+}*/
 
 
 INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 {
-#define INIT_MAX_ITEMS (64)
-	static ptrdiff_t maxItems = INIT_MAX_ITEMS;     // remember as static if maxItems is increased
-	static ptrdiff_t cItems = 0;
-	static TARGETINFO * ti = NULL;       // maxItems
-	static ptrdiff_t * MetaIndex = NULL; // maxItems
-	static LPHACK_PARAMS lphp;
 
-	static TCHAR * lpSavedWindowText = NULL;
+	//static ptrdiff_t maxItems = INIT_MAX_ITEMS;     // remember as static if maxItems is increased
+	static ptrdiff_t cItems = 0;
+	static ptrdiff_t curIdx = 0;
+	static PROCESSINFO * ti = NULL;
+#ifdef PTRSORT
+	static PROCESSINFO ** lpPtrArr = NULL;
+#endif
+	///static ptrdiff_t * MetaIndex = NULL; // maxItems
+
+	static TARGETINFO * pTarget = NULL;
+
 	static HFONT hfontPercent = NULL;
-	//static HBRUSH hListBoxBrush = NULL;
-	static int hot[ 3 ];
-	static int current_IFF = 0;
+	//static int hot[ MAX_SLOTS ];
+	//static int current_IFF = 0;
 	static int sort_algo = IFF;
+	static int nReloading = 0;
 	static bool fRevSort = false;
 	static bool fQuickTimer = false;
-	static bool fReloading = false;
-
+	static bool fListAll = false;
 	static bool fCPUTime = true; // show CPU load: disabled on WM_COMMAND and WM_DESTROY
 	static bool fContextMenu = false; // context menu is on
 	static bool fPaused = false; // auto-refresh disabled
@@ -823,83 +819,67 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 		{
 			fCPUTime = true;
 			fContextMenu = false;
-			fReloading = false;
+			nReloading = 0;
 
-			lphp = (LPHACK_PARAMS) lParam;
+			pTarget = (TARGETINFO *) lParam;
 
-			if( maxItems < INIT_MAX_ITEMS ) maxItems = INIT_MAX_ITEMS; // this should never happen
-			ti = (TARGETINFO *)
-				HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(TARGETINFO) * maxItems );
+			ti = (PROCESSINFO *)
+				HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(PROCESSINFO) * 64 );
+			cItems = 64; // 20140401
 			
-			MetaIndex = (ptrdiff_t *)
-				HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ptrdiff_t) * maxItems );
 			
-			lpSavedWindowText = (TCHAR*)
-				HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(TCHAR) * MAX_WINDOWTEXT );
-			
-			if( ! lphp || ! ti || ! MetaIndex || ! lpSavedWindowText )
+			if( ! pTarget || ! ti /*|| ! MetaIndex*/ )
 			{
 				EndDialog( hDlg, XLIST_CANCELED );
 				break;
 			}
 
+			TCHAR szWindowText[ MAX_WINDOWTEXT ] = _T("");
+
 #ifdef _UNICODE
 			if( IS_JAPANESEo )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_JPNo_1000, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_JPNo_1000, -1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_JAPANESE )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_JPN_1000, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_JPN_1000, -1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_FINNISH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_FIN_1000, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_FIN_1000, -1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_SPANISH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_SPA_1000, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_SPA_1000, -1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_CHINESE_T )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_CHI_1000T, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_CHI_1000T, -1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_CHINESE_S )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_CHI_1000S, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_CHI_1000S, -1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else if( IS_FRENCH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_FRE_1000, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_FRE_1000, -1, szWindowText, MAX_WINDOWTEXT );
 			}
 			else
 #endif
 			{
-				_tcscpy_s( lpSavedWindowText, MAX_WINDOWTEXT, _T( "Which process would you like to limit?" ) );
-				SetWindowText( hDlg, lpSavedWindowText );
+				_tcscpy_s( szWindowText, MAX_WINDOWTEXT, _T( "Which process would you like to limit?" ) );
 			}
+			SetWindowText( hDlg, szWindowText );
 
-
-			//if( g_bHack[ 2 ] || g_bHack[ 3 ] )
-			/*if( g_bHack[ 3 ] )
-			{
-				EnableWindow( GetDlgItem( hDlg, IDC_WATCH ), FALSE );
-			}*/
-			hot[0]=hot[1]=hot[2]=-1;
+			//for( ptrdiff_t g = 0; g < MAX_SLOTS; ++g ) hot[ g ] = -1;
 
 			SendDlgItemMessage( hDlg, IDC_TARGET_LIST, WM_SETFONT, 
 								(WPARAM) g_hFont, MAKELPARAM( FALSE, 0 ) );
@@ -916,9 +896,9 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 			
 			if( ! fPaused )
 				SendDlgItemMessage( hDlg, IDC_AUTOREFRESH, BM_SETCHECK, BST_CHECKED, 0 );
-
+			fListAll = _always_list_all();
 			SetWindowText( GetDlgItem( hDlg, IDC_LISTALL_SYS ), 
-							_always_list_all() ? strNondefListBtn : strDefListBtn );
+							fListAll ? strNondefListBtn : strDefListBtn );
 
 			HDC hDC = GetDC( hDlg );
 			hfontPercent = MyCreateFont( hDC, TEXT( "Verdana" ), 12, TRUE, FALSE );
@@ -967,24 +947,44 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 			// the context menu is on.
 			if( fCPUTime
 				&& ! fPaused
-				&& ! fReloading
+				&& ! nReloading
 				&& ! fContextMenu
+				&& IsWindowVisible( hDlg )
 				&& ! IsLButtonDown()
 				&& ! IsRButtonDown()
 			)
 			{
 				SendMessage( hDlg, WM_USER_REFRESH, dwPID, 0 );
 			}
+
 			break;
 		}
 
 		case WM_USER_REFRESH:
 		{
-			if( ! ti || ! MetaIndex ) break;
+			if( ! ti || ! pTarget )
+			{
+				EndDialog( hDlg, XLIST_CANCELED );
+				break;
+			}
 
-			fReloading = true;
+			++nReloading;
+
+			if( LOWORD( lParam ) == URF_SORT_ALGO )
+			{
+				if( HIWORD( lParam ) == sort_algo ) // same subitem clicked consecutively
+				{
+					fRevSort = ! fRevSort; // reverse the sorting order
+				}
+				else
+				{
+					sort_algo = HIWORD( lParam );
+					fRevSort = false;
+				}
+			}
+
 #if 1//def _DEBUG
-	LARGE_INTEGER li0,li;
+	LARGE_INTEGER li0 = {0};
 	QueryPerformanceCounter(&li0);
 #endif
 
@@ -997,31 +997,50 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 			POINT pt0 = {0};
 			ListView_GetItemPosition( hwndList, 0, &pt0 );
 			const LONG dy = pt.y - pt0.y;
-#ifdef _DEBUG
-//			TCHAR s[100];swprintf_s(s,100,L"dy=%d iTop=%d\n",dy,iTopIndex);
-//			OutputDebugString(s);
-#endif
-			
 			
 			if( wParam == (WPARAM) -1 )
 			{
-				ptrdiff_t sel = ListView_GetCurrentSel( hwndList );
+				ptrdiff_t sel = curIdx;
 			
 				if( sel < 0 || cItems <= sel )
 				{
 					sel = 0;
 				}
-
-				wParam = ti[ MetaIndex[ sel ] ].dwProcessId;
+#ifdef PTRSORT
+				wParam = (lpPtrArr && sel < cItems) ? lpPtrArr[ sel ]->dwProcessId : 0 ;
+#else
+				wParam = (sel < cItems) ? ti[ sel ].dwProcessId : 0 ;
+#endif
 			}
 
-			const int listLevel = _is_list_button_def( hDlg ) ? 0 : LIST_SYSTEM_PROCESS;
+			//const int listLevel = _is_list_button_def( hDlg ) ? 0 : LIST_SYSTEM_PROCESS;
 
-			const ptrdiff_t prev_maxItems = maxItems;
-			int numOfPairs;
-			cItems = UpdateProcessSnap( &ti, &maxItems, listLevel, &numOfPairs );
+//			const ptrdiff_t prev_maxItems = maxItems;
+			
+			CachedList_Refresh( 1000 );
+			ptrdiff_t numOfPairs;
+			cItems = UpdateProcessSnap( ti, fListAll, &numOfPairs, cItems );
 
-			if( prev_maxItems < maxItems )
+			if( ! ti )
+			{
+				EndDialog( hDlg, XLIST_CANCELED );
+				break;
+			}
+
+#ifdef PTRSORT
+			if( lpPtrArr ) HeapFree( GetProcessHeap(), 0, lpPtrArr );
+			lpPtrArr = (PROCESSINFO**) HeapAlloc( GetProcessHeap(), 0,
+													sizeof(PROCESSINFO*) * (SIZE_T) cItems );
+			if( ! lpPtrArr )
+			{
+				EndDialog( hDlg, XLIST_CANCELED );
+				--nReloading;
+				break;
+			}
+
+			
+#endif
+			/*if( maxItems != prev_maxItems )
 			{
 				LPVOID lpv = HeapReAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, 
 											MetaIndex, sizeof(ptrdiff_t) * maxItems );
@@ -1030,46 +1049,71 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 					HeapFree( GetProcessHeap(), 0, MetaIndex );
 					MetaIndex = NULL;
 					EndDialog( hDlg, XLIST_CANCELED );
-					fReloading = false;
+					--nReloading;
 					break;
 				}
 
 				MetaIndex = (ptrdiff_t*) lpv;
+			}*/
+
+			for( ptrdiff_t i = 0; i < cItems; ++i )
+			{
+				ptrdiff_t g = 0;
+				for( ; g < MAX_SLOTS; ++g )
+					if( ti[ i ].dwProcessId == pTarget[ g ].dwProcessId ) break;
+				
+				ti[ i ].slotid = (UINT) g;
+#ifdef PTRSORT
+				lpPtrArr[ i ] = &ti[ i ];
+#endif
 			}
 
+#ifdef PTRSORT
+# define SORTEE lpPtrArr
+# define SORTSIZE sizeof(PROCESSINFO*)
+#else
+# define SORTEE ti
+# define SORTSIZE sizeof(PROCESSINFO)
+#endif
 			if( fRevSort )
 			{
-				if( sort_algo == CPU )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_CPU2 );
+				if( sort_algo == SLOT )
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_SLOT2 );
+				else if( sort_algo == IFF )
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_IFF2 );
 				else if( sort_algo == EXE )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_EXE2 );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_EXE2 );
+				else if( sort_algo == CPU )
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_CPU2 );
 				else if( sort_algo == TITLE )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_TITLE2 );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_TITLE2 );
 				else if( sort_algo == PATH )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_PATH2 );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_PATH2 );
 				else if( sort_algo == THREADS )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_THREADS2 );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_THREADS2 );
 				else
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_PID2 );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_PID2 );
 			}
 			else
 			{
-				if( sort_algo == CPU )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_CPU );
+				if( sort_algo == SLOT )
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_SLOT );
+				else if( sort_algo == IFF )
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_IFF );
 				else if( sort_algo == EXE )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_EXE );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_EXE );
+				else if( sort_algo == CPU )
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_CPU );
 				else if( sort_algo == TITLE )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_TITLE );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_TITLE );
 				else if( sort_algo == PATH )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_PATH );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_PATH );
 				else if( sort_algo == THREADS )
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_THREADS );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_THREADS );
 				else
-					qsort( ti, (size_t) cItems, sizeof(TARGETINFO), &target_comp_PID );
+					qsort( SORTEE, (size_t) cItems, SORTSIZE, &picmp_PID );
 			}
 
-			ptrdiff_t index = 0;
-			ptrdiff_t m = 0;
 			ptrdiff_t cursel = 0;
 			const DWORD dwTargetId = (DWORD) wParam;
 
@@ -1077,77 +1121,37 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 
 			ListView_DeleteAllItems( hwndList );
 
-			if( sort_algo == IFF )
+			for( ptrdiff_t index = 0; index < cItems; ++index )
 			{
-				if( fRevSort )
-				{
-					for( int iff = IFF_SYSTEM; iff <= IFF_ABS_FOE; ++iff )
-					{
-						for( index = 0; index < cItems; ++index )
-						{
-							if( ti[ index ].iIFF == iff )
-							{
-								MetaIndex[ m ] = index;
-								_add_item( hwndList, iff, ti[ index ] );
-								
-								if( dwTargetId && ti[ index ].dwProcessId == dwTargetId )
-									cursel = m;
-								
-								++m;
-							}
-						}
-					}
-				}
-				else
-				{
-					for( int iff = IFF_ABS_FOE; IFF_SYSTEM <= iff; --iff )
-					{
-						for( index = 0; index < cItems; ++index )
-						{
-							if( ti[ index ].iIFF == iff )
-							{
-								MetaIndex[ m ] = index;
-								_add_item( hwndList, iff, ti[ index ] );
-								
-								if( dwTargetId && ti[ index ].dwProcessId == dwTargetId )
-									cursel = m;
-								
-								++m;
-							}
-						}
-					}
-				}
-			}
-			else
-			{
-				for( index = 0; index < cItems; ++index )
-				{
-					MetaIndex[ m ] = index;
-					_add_item( hwndList, ti[ index ].iIFF, ti[ index ] );
+#ifdef PTRSORT
+				_add_item( hwndList, lpPtrArr[ index ]->iIFF, *lpPtrArr[ index ] );
+				if( dwTargetId && lpPtrArr[ index ]->dwProcessId == dwTargetId )
+					cursel = index;
+#else
+				_add_item( hwndList, ti[ index ].iIFF, ti[ index ] );
+				if( dwTargetId && ti[ index ].dwProcessId == dwTargetId )
+					cursel = index;
+#endif
 
-					if( dwTargetId && ti[ index ].dwProcessId == dwTargetId )
-						cursel = m;
-					
-					++m;
-				}
 			}
 
-			LVFINDINFO find;
+
+			/*LVFINDINFO find;
 			find.flags = LVFI_PARAM;
-			for( ptrdiff_t x = 0; x < 3; ++x )
+			for( ptrdiff_t x = 0; x < MAX_SLOTS; ++x )
 			{
-				if( g_bHack[ x ] )
+				if( x != 3 && g_bHack[ x ] )
 				{
-					find.lParam = (LONG) g_dwTargetProcessId[ x ];
+					find.lParam = (LONG) pTarget[ x ].dwProcessId;
 					hot[ x ] = ListView_FindItem( hwndList, -1, &find );
 				}
 				else hot[ x ] = -1;
-			}
+			}*/
 
 			for( int col_idx = 0; col_idx < N_COLS; ++col_idx )
 			{
 				ListView_SetColumnWidth( hwndList, col_idx, 
-					( col_idx == IFF || col_idx == CPU || col_idx == THREADS )
+					( col_idx == SLOT || col_idx == IFF || col_idx == CPU || col_idx == THREADS )
 					? LVSCW_AUTOSIZE_USEHEADER : LVSCW_AUTOSIZE );
 			}
 
@@ -1172,26 +1176,26 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 				SendMessage( hDlg, WM_NEXTDLGCTL, (WPARAM) hwndList, MAKELPARAM( TRUE, 0 ) );
 
 
-			LV_OnSelChange( hDlg, MetaIndex, ti, cItems, current_IFF );
-
 #if 1//def _DEBUG
 	if( fDebug )
 	{
+		LARGE_INTEGER li = {0};
+	LARGE_INTEGER freq = {0};
+	TCHAR s[ 100 ] = _T("");
 	QueryPerformanceCounter(&li);
-	LARGE_INTEGER freq;
-	QueryPerformanceFrequency( &freq );
-	TCHAR s[100];
+	QueryPerformanceFrequency(&freq);
 	_stprintf_s(s,100,_T("%d Processes, %d Threads: cost=%.2f ms"),
-		(int) cItems,
-		numOfPairs,
-		(double)(li.QuadPart-li0.QuadPart)/freq.QuadPart*1000.0);
+					(int) cItems,
+					(int) numOfPairs,
+					(freq.QuadPart !=0)	? (double)( li.QuadPart - li0.QuadPart ) / freq.QuadPart * 1000.0 : -1.0
+				);
 	//OutputDebugString(s);
 	//OutputDebugString(_T("\n"));
 	SetWindowText(hDlg,s);
 	}
 #endif	
 
-			fReloading = false;
+			--nReloading;
 			break;
 		}
 
@@ -1208,76 +1212,81 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 				break;
 			}
 
-			const ptrdiff_t sel
-				= ListView_GetCurrentSel( GetDlgItem( hDlg, IDC_TARGET_LIST ) );
+			const ptrdiff_t sel = curIdx;
 
-			ptrdiff_t index = 0;
-			DWORD pid = 0;
-			if( ti && MetaIndex && 0 <= sel && sel < cItems )
+#ifdef PTRSORT
+			if( ti && lpPtrArr && 0 <= sel && sel < cItems && pTarget )
+#else
+			if( ti && 0 <= sel && sel < cItems && pTarget )
+#endif
 			{
-				index = MetaIndex[ sel ];
-				pid = ti[ index ].dwProcessId;
+				; // ok
 			}
 			else
 			{
 				fCPUTime = true;
 				break;
 			}
-
+#ifdef PTRSORT
+			PROCESSINFO& ProcessInfo = *lpPtrArr[ sel ];
+#else
+			PROCESSINFO& ProcessInfo = ti[ sel ];
+#endif
+			const DWORD pid = ProcessInfo.dwProcessId;
 			switch( CtrlID )
 			{
 				case IDOK:
 				case IDC_SLIDER_BUTTON:
 				{
-					bool fLimitThis = false;
-					if( IsProcessBES( pid ) )
+					ptrdiff_t numOfPairs = 0;
+					PROCESS_THREAD_PAIR * sorted_pairs = GetCachedPairs( 1000, numOfPairs );
+					BOOL bBES = IsProcessBES( pid, sorted_pairs, numOfPairs );
+					if( sorted_pairs )
 					{
-						MessageBox( hDlg, ti[ index ].szPath,
-									TEXT("BES Can't Target BES"),
+						MemFree( sorted_pairs );
+						sorted_pairs = NULL;
+					}
+					if( bBES )
+					{
+						MessageBox( hDlg, ProcessInfo.szPath, TEXT("BES Can't Target BES"),
 									MB_OK | MB_ICONEXCLAMATION );
 						break;
 					}
 
-					// update the flag @20120927
 					// This flag is used in the "Question" function; otherwise not important
-					ti[ index ].fWatch = ( lParam == XLIST_WATCH_THIS );
+					ProcessInfo.fWatch = ( lParam == XLIST_WATCH_THIS );
 
-					ptrdiff_t g = 0;
-					for( ; g < 3; ++g )
+					ptrdiff_t g = 0;  // if the target is new, g = MAX_SLOTS
+					while( g < MAX_SLOTS && ( g == 3 || pid != pTarget[ g ].dwProcessId ) ) ++g;
+					
+					if( g < MAX_SLOTS && lParam != XLIST_WATCH_THIS && g_bHack[ g ] ) // Unlimit
 					{
-						if( pid == g_dwTargetProcessId[ g ] )
-							break;
+						// STOPF_NO_LV_REFRESH = "Don't send back WM_USER_REFRESH"
+						SendMessage( g_hWnd, WM_USER_STOP, (WPARAM) g, STOPF_NO_LV_REFRESH | STOPF_UNLIMIT );
+						SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE | URF_RESET_FOCUS );
+						break;
 					}
 					
-					// Unlimit
-					if( lParam != XLIST_WATCH_THIS )
-					{
-						if( g < 3 && g_bHack[ g ] )
-						{
-							if( g == 2 && g_bHack[ 3 ] )
-							{
-								SendMessage( g_hWnd, WM_COMMAND, IDM_UNWATCH, 0 );
-							}
-
-							// STOPF_NO_LV_REFRESH = "Don't send back WM_USER_REFRESH"
-							SendMessage( g_hWnd, WM_USER_STOP, (WPARAM) g, STOPF_NO_LV_REFRESH );
-							SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE | URF_RESET_FOCUS );
-							break;
-						}
-					}
-					
-					fLimitThis = (CtrlID == IDC_SLIDER_BUTTON)
-									|| DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_QUESTION),
-														hDlg, &Question, (LPARAM) &ti[ index ] );
-
 					ptrdiff_t iMyId = 0;
 					int iSlider = 0;
-					if( fLimitThis )
+
+					// fLimitThis
+					if( CtrlID == IDC_SLIDER_BUTTON
+						|| DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_QUESTION), hDlg,
+											&Question, (LPARAM) &ProcessInfo ) )
 					{
-						if( ti[ index ].iIFF == IFF_UNKNOWN || ti[ index ].iIFF == IFF_FRIEND )
+						if( ProcessInfo.pExe &&
+							(ProcessInfo.iIFF == IFF_UNKNOWN || ProcessInfo.iIFF == IFF_FRIEND) )//?
 						{
-							if( g_numOfEnemies < MAX_PROCESS_CNT )
-								_tcscpy_s( g_lpszEnemy[ g_numOfEnemies++ ], CCHPATH, ti[ index ].szExe );
+							if( g_numOfEnemies < MAX_ENEMY_CNT )
+							{
+								size_t cchMem = _tcslen( ProcessInfo.pExe ) + 1;
+								g_lpszEnemy[ g_numOfEnemies ]
+									= TcharAlloc( cchMem );
+								if( g_lpszEnemy[ g_numOfEnemies ] )
+									_tcscpy_s( g_lpszEnemy[ g_numOfEnemies++ ], cchMem, ProcessInfo.pExe );
+								else break;
+							}      
 
 							// If this target (=enemy) is an ex-friend, make the friend list
 							// smaller by 1, by removing that ex-friend (at index i).
@@ -1286,133 +1295,82 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 							//     just in case).  Do NOT copy in this case; copying is not
 							//     only unnecessary, but the behavior is undefined, since
 							//     overlapping (dst==src).
-							// (3) Tcscpy_s does _tcscpy_s if (1), and does nothing if (2).
 							for( ptrdiff_t i = 0; i < g_numOfFriends; ++i )
 							{
-								// formerly considered as Friend
-								if( Lstrcmpi( ti[ index ].szExe, g_lpszFriend[ i ] ) == 0 )
+								if( StrEqualNoCase( ProcessInfo.pExe, g_lpszFriend[ i ] ) )
 								{
-									Tcscpy_s( g_lpszFriend[ i ], MAX_PATH * 2, g_lpszFriend[ g_numOfFriends - 1 ] );
-
-									// Clean the last guy's place, who is now at index i if still a friend.
-									// g_numOfFriends is > 0: otherwise this for-loop is never executed.
-									*g_lpszFriend[ g_numOfFriends-- ] = _T('\0');
-									// break;
+									// g_numOfFriends>=1: otherwise this code is not executed.
+									// g_numOfFriends is thread-safe (unless ReadIni is called by another
+									// thread, which isn't) // 20140315 updated
+									if( --g_numOfFriends != i )
+									{
+										HeapFree( GetProcessHeap(), 0, g_lpszFriend[ i ] );
+										g_lpszFriend[ i ] = g_lpszFriend[ g_numOfFriends ];
+									}
+									else
+									{
+										HeapFree( GetProcessHeap(), 0, g_lpszFriend[ g_numOfFriends ] );
+									}
+									g_lpszFriend[ g_numOfFriends ] = NULL;
 								}
 							}
 						}
 
 						if( lParam == XLIST_WATCH_THIS )
 						{
-							if( g_bHack[ 0 ] && g_bHack[ 1 ] && g_bHack[ 2 ] )
+							// If the target to watch is already limited, unlimit it once.
+							for( g = 0; g < MAX_SLOTS; ++g )
 							{
-								for( g = 0; g < MAX_SLOTS; ++g )
+								if( g != 3 && pid == pTarget[ g ].dwProcessId )
 								{
-									if( pid == g_dwTargetProcessId[ g ] )
-									{
+									if( g_bHack[ g ] )
 										SendMessage( g_hWnd, WM_USER_STOP,
-													(WPARAM) g, STOPF_NO_LV_REFRESH );
-										break;
+												(WPARAM) g, STOPF_NO_LV_REFRESH );
+									if( g < 3 )
+									{
+										for( ptrdiff_t j = (4*g); j < (4*g) + 4; ++j )
+											ppszStatus[ j ][ 0 ] = _T('\0');
 									}
-								}
-
-								if( g == MAX_SLOTS )
-								{
-									MessageBox( hDlg, _T("4"), APP_NAME, MB_OK | MB_ICONSTOP );
-									break;
+									
+									ResetTi( pTarget[ g ] ); // ?
 								}
 							}
 
-							for( iMyId = MAX_SLOTS - 1; 0 <= iMyId; --iMyId )
+							iSlider = GetSliderIni( ProcessInfo.szPath, g_hWnd );
+
+							if( g_bHack[ 3 ] )
 							{
-								if( !g_bHack[ iMyId ] &&
-										WaitForSingleObject( hSemaphore[ iMyId ], 100 )
+								size_t cchPath = _tcslen( ProcessInfo.szPath );
+								size_t cchMem = 32 + cchPath + 32;
+								TCHAR * lpMem = TcharAlloc( cchMem );
+								if( ! lpMem ) break;
+
+								_stprintf_s( lpMem, cchMem, _T("bes.exe -J \"%s\" %d"), ProcessInfo.szPath, iSlider );
+
+								bool fAllowMoreThan99 = IsMenuChecked( g_hWnd, IDM_ALLOWMORETHAN99 );
+								HandleJobList( g_hWnd, lpMem, fAllowMoreThan99, pTarget );
+								TcharFree( lpMem );
+								break;
+							}
+
+							// Get a sema
+							for( iMyId = 2; 0 <= iMyId; --iMyId )
+							{
+								if( ! pTarget[ iMyId ].fUnlimited
+									&& ! g_bHack[ iMyId ]
+									&& WaitForSingleObject( hSemaphore[ iMyId ], 100 )
 										== WAIT_OBJECT_0 ) break;
 							}
 
 							if( iMyId == -1 )
 							{
-								MessageBox( hDlg, TEXT( "Semaphore Error" ), APP_NAME, MB_OK | MB_ICONSTOP );
-								break;
-							}
-
-							// Slot2 is already taken and active: we will get slot 2 after moving
-							// the current target @ slot 2 to slot iMyId
-							if( iMyId != 2 && g_bHack[ 2 ] )
-							{
-								// If old@2 and new@2 are the same (i.e. if we're gonna watch what
-								// we are already limiting but not watching), just stop #2 then
-								// reuse it to watch #2. The slot @ iMyId is freed.
-								if( lphp[ 2 ].lpTarget->dwProcessId == pid )
+								for( iMyId = 4; iMyId < MAX_SLOTS; ++iMyId ) // more slots
 								{
-									// original iMyId sema is not needed
-									ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-
-									// hp[2] will be cleared by the called
-									SendMessage( g_hWnd, WM_USER_STOP, (WPARAM) 2, STOPF_NO_LV_REFRESH );
-
-									// wait until slot 2 is free again
-									if( WaitForSingleObject( hSemaphore[ 2 ], 2000 ) != WAIT_OBJECT_0 )
-									{
-										MessageBox( hDlg, TEXT("2->2"), APP_NAME, MB_ICONSTOP | MB_OK );
-										break;
-									}
+									if( ! pTarget[ iMyId ].fUnlimited
+										&& ! g_bHack[ iMyId ]
+										&& WaitForSingleObject( hSemaphore[ iMyId ], 100 )
+											== WAIT_OBJECT_0 ) break;
 								}
-								else
-								{
-									// Prepare to move old target @ 2 to the new slot @ iMyId
-									*lphp[ iMyId ].lpTarget = *lphp[ 2 ].lpTarget;
-									lphp[ iMyId ].iMyId = iMyId;
-
-									//?
-									g_dwTargetProcessId[ iMyId ] = g_dwTargetProcessId[ 2 ];
-
-									// hp[2] will be cleared by the called
-									SendMessage( g_hWnd, WM_USER_STOP, (WPARAM) 2, STOPF_NO_LV_REFRESH );
-
-									// wait until slot 2 is free again
-									if( WaitForSingleObject( hSemaphore[ 2 ], 2000 ) != WAIT_OBJECT_0 )
-									{
-										MessageBox( hDlg, TEXT("2->0/1"), APP_NAME, MB_ICONSTOP | MB_OK );
-										break;
-									}
-									// Don't release sema for iMyId; it'll be used by old target@2
-									SendMessage( g_hWnd, WM_USER_HACK, (WPARAM) iMyId, (LPARAM) &lphp[ iMyId ] );
-								}
-							}
-							// iMyId is not 2, but slot 2 is free.  This situation is not likely;
-							// only possible if ever via subtle race condition
-							else if( iMyId != 2 /*&& !g_bHack[ 2 ]*/ )
-							{
-								ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-								MessageBox( hDlg, TEXT("race"), APP_NAME, MB_ICONSTOP | MB_OK );
-								break;
-							}
-
-							iMyId = 2;
-							iSlider = GetSliderIni( ti[ index ].szPath, g_hWnd );
-							g_Slider[ iMyId ] = iSlider;
-
-							*lphp[ 2 ].lpTarget = ti[ index ];
-							lphp[ 2 ].iMyId = 2;
-							ReleaseSemaphore( hSemaphore[ 2 ], 1L, NULL );
-							SetTargetPlus( g_hWnd, &hChildThread[ 3 ], &lphp[ 2 ],
-											ti[ index ].szPath,
-											ti[ index ].szExe );
-						}
-						else if( g < MAX_SLOTS ) // relimit
-						{
-							iSlider = g_Slider[ g ];
-							SendMessage( g_hWnd, WM_USER_RESTART, (WPARAM) g, 0 );
-						}
-						else
-						{
-							for( iMyId = 0; iMyId < MAX_SLOTS; ++iMyId )
-							{
-								if( !g_bHack[ iMyId ]
-									&& 
-									WaitForSingleObject( hSemaphore[ iMyId ], 100 )
-										== WAIT_OBJECT_0 ) break;
 							}
 
 							if( iMyId == MAX_SLOTS )
@@ -1421,59 +1379,99 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 								break;
 							}
 
-							lphp[ iMyId ].iMyId = iMyId;
-							*(lphp[ iMyId ].lpTarget) = ti[ index ];
+							// Slot 2 is already used
+							if( iMyId != 2 )
+							{
+								// Copy the info of the target at slot 2
+								if( ! TiCopyFrom( pTarget[ iMyId ], pTarget[ 2 ] ) )
+								{
+									ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
+									break;
+								}
+//								const DWORD dwOldPID = pTarget[ 2 ].dwProcessId;
+								g_Slider[ iMyId ] = g_Slider[ 2 ];
+								SendMessage( g_hWnd, WM_USER_STOP, (WPARAM) 2, STOPF_NO_LV_REFRESH );
 
-							iSlider = GetSliderIni( ti[ index ].szPath, g_hWnd );
-							g_Slider[ iMyId ] = iSlider;
+								// Get sema 2 - wait until slot 2 is free again
+								if( WaitForSingleObject( hSemaphore[ 2 ], 3000 ) != WAIT_OBJECT_0 )
+								{
+									MessageBox( hDlg, TEXT("Busy2"), APP_NAME, MB_ICONSTOP | MB_OK );
+									ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
+									break;
+								}
 
-							SendMessage( g_hWnd, WM_USER_HACK, (WPARAM) iMyId, (LPARAM) &lphp[ iMyId ] );
+								if( pTarget[ iMyId ].fUnlimited )
+								{
+									ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
+								}
+								else
+								{
+									// Don't release hSemaphore[ iMyId ]; it'll be used by the ex-slot2 target
+									SendMessage( g_hWnd, WM_USER_HACK, (WPARAM) iMyId,
+													(LPARAM) &pTarget[ iMyId ] );
+								}
+								
+								iMyId = 2;
+							}
+
+
+							BOOL bReady = TiFromPi( pTarget[ 2 ], ProcessInfo );
+							
+							ReleaseSemaphore( hSemaphore[ 2 ], 1L, NULL );
+
+							if( bReady )
+							{
+								SetTargetPlus( g_hWnd, 
+												pTarget,
+												ProcessInfo.szPath,
+												GetSliderIni( ProcessInfo.szPath, g_hWnd ) );
+							}
 						}
-					} // fLimitThis
-					else // cancel@Question
-					{
-						// reset the flag @20120927
-						ti[ index ].fWatch = false;
-					}
+						else if( g < MAX_SLOTS && g != 3 ) // relimit
+						{
+							iSlider = g_Slider[ g ];
+							SendMessage( g_hWnd, WM_USER_RESTART, (WPARAM) g, 0 );
+						}
+						else // new target (no-watch)
+						{
+							iSlider = GetSliderIni( ProcessInfo.szPath, g_hWnd ); // +20170906
+							LimitProcess_NoWatch( hDlg, pTarget, ProcessInfo, NULL );
+						}
 					
-					if( fLimitThis )
-					{
 						SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
 						ActivateSlider( hDlg, iSlider );
 					}
 					else
+					{
+						ProcessInfo.fWatch = false;
 						SetDlgItemFocus( hDlg, GetDlgItem( hDlg, IDC_TARGET_LIST ) );
+					}
 
 					break;
 				} // case IDOK, IDC_SLIDER_BUTTON
 				
 				case IDCANCEL:
-				{
 					EndDialog( hDlg, XLIST_CANCELED );
 					break;
-				}
 
 				case IDC_WATCH:
-				{
-					if( g_bHack[ 3 ] ) // Unwatch
-					{
-						SendMessage( g_hWnd, WM_COMMAND, IDM_UNWATCH, 0 );
-						SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE | URF_RESET_FOCUS );
-					}
-					else // Watch new
-					{
-						SendMessage( hDlg, WM_COMMAND, IDOK, (LPARAM) XLIST_WATCH_THIS );
-					}
+					//if( g_bHack[ 3 ] )//20151204@1.7.0.27
+					//	SendMessage( g_hWnd, WM_COMMAND, IDM_UNWATCH, 0 ); // unwatch
+					//else
+						SendMessage( hDlg, WM_COMMAND, IDOK, XLIST_WATCH_THIS );
 					break;
-				}
 
 				case IDC_LISTALL_SYS:
 				{
-					if( _is_list_button_def( hDlg ) ) // btn status is currently default ("List all")
+					fListAll = ! fListAll;
+					if( fListAll ) // now list all
 					{
 						SetDlgItemText( hDlg, IDC_LISTALL_SYS, strNondefListBtn ); // toggle the btn
+
+						//if( ! _always_list_all() )
+						//	SendMessage( g_hWnd, WM_COMMAND, IDM_ALWAYS_LISTALL, 0 );
 					}
-					else // btn status is currently non-default ("Normal list")
+					else // now normal list
 					{
 						SetDlgItemText( hDlg, IDC_LISTALL_SYS, strDefListBtn ); // toggle the btn
 						
@@ -1486,113 +1484,131 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 				}
 
 				case IDC_RELOAD:
-				{
-					// Don't reload if already reloading
-					if( ! fReloading )
+					if( ! nReloading ) // Don't reload if already reloading
 					{
-						fReloading = true;
-
-						SendMessage( hDlg, WM_USER_REFRESH, pid, 0 );
-
-						fReloading = false;
+						++nReloading;
+						SendMessage( hDlg, WM_USER_REFRESH, pid, URF_RESET_FOCUS );
+						--nReloading;
 					}
 					break;
-				}
 
 				case IDC_FOE:
 				{
-					WriteIni_Time( ti[ index ].szExe );
+					if( ! ProcessInfo.pExe ) break;
+					WriteIni_Time( ProcessInfo.pExe );
 
-					if( g_numOfEnemies < MAX_PROCESS_CNT )
-						_tcscpy_s( g_lpszEnemy[ g_numOfEnemies++ ], MAX_PATH * 2, ti[ index ].szExe );
+					if( g_numOfEnemies < MAX_ENEMY_CNT )
+					{
+						size_t cchMem = _tcslen( ProcessInfo.pExe ) + 1;
+						g_lpszEnemy[ g_numOfEnemies ]
+							= TcharAlloc( cchMem );
+						if( g_lpszEnemy[ g_numOfEnemies ] )
+							_tcscpy_s( g_lpszEnemy[ g_numOfEnemies++ ], cchMem, ProcessInfo.pExe );
+						else break;
+					}
 
 					for( ptrdiff_t i = 0; i < g_numOfFriends; ++i )
 					{
-						// formerly considered as Friend
-						if( Lstrcmpi( ti[ index ].szExe, g_lpszFriend[ i ] ) == 0 )
+						if( StrEqualNoCase( ProcessInfo.pExe, g_lpszFriend[ i ] ) )
 						{
-							/*
-							if( g_numOfFriends >= 2 )
+							if( --g_numOfFriends != i )
 							{
-								_tcscpy_s( g_lpszFriend[ i ], MAX_PATH * 2, g_lpszFriend[ g_numOfFriends - 1 ] );
-								*g_lpszFriend[ g_numOfFriends - 1 ] = _T('\0');
+								HeapFree( GetProcessHeap(), 0, g_lpszFriend[ i ] );
+								g_lpszFriend[ i ] = g_lpszFriend[ g_numOfFriends ];
 							}
-							*/
-
-							// $FIX(2/5) see above
-							Tcscpy_s( g_lpszFriend[ i ], MAX_PATH * 2, g_lpszFriend[ g_numOfFriends - 1 ] );
-
-							*g_lpszFriend[ g_numOfFriends-- ] = _T('\0');
-
-							//break;
+							else
+							{
+								HeapFree( GetProcessHeap(), 0, g_lpszFriend[ g_numOfFriends ] );
+							}
+							g_lpszFriend[ g_numOfFriends ] = NULL;
 						}
 					}
 
+					//ProcessInfo.iIFF = IFF_FOE; // <-- not really needed
 					SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
 					break;
 				}
 
 				case IDC_FRIEND:
 				{
-					WriteIni_Time( ti[ index ].szExe );
+					if( ! ProcessInfo.pExe ) break;
+					WriteIni_Time( ProcessInfo.pExe );
 
-					if( g_numOfFriends < MAX_PROCESS_CNT )
-						_tcscpy_s( g_lpszFriend[ g_numOfFriends++ ], MAX_PATH *2, ti[ index ].szExe );
+					if( g_numOfFriends < MAX_FRIEND_CNT )
+					{
+						size_t cchMem = _tcslen( ProcessInfo.pExe ) + 1;
+						g_lpszFriend[ g_numOfFriends ] =
+								TcharAlloc( cchMem );
+						if( g_lpszFriend[ g_numOfFriends ] )
+							_tcscpy_s( g_lpszFriend[ g_numOfFriends++ ], cchMem, ProcessInfo.pExe );
+						else break;
+					}
 
 					for( ptrdiff_t i = 0; i < g_numOfEnemies; ++i )
 					{
-						// formerly considered as Foe
-						if( Lstrcmpi( ti[ index ].szExe, g_lpszEnemy[ i ] ) == 0 )
+						if( StrEqualNoCase( ProcessInfo.pExe, g_lpszEnemy[ i ] ) )
 						{
-							// $FIX(3/5): see above.
-							Tcscpy_s( g_lpszEnemy[ i ], MAX_PATH * 2, g_lpszEnemy[ g_numOfEnemies - 1 ] );
-
-							*g_lpszEnemy[ g_numOfEnemies-- ] = _T('\0');
-
-							//break;
+							if( --g_numOfEnemies != i )
+							{
+								HeapFree( GetProcessHeap(), 0, g_lpszEnemy[ i ] );
+								g_lpszEnemy[ i ] = g_lpszEnemy[ g_numOfEnemies ];
+							}
+							else
+							{
+								HeapFree( GetProcessHeap(), 0, g_lpszEnemy[ g_numOfEnemies ] );
+							}
+							g_lpszEnemy[ g_numOfEnemies ] = NULL;
 						}
 					}
 
+					//ProcessInfo.iIFF = IFF_FRIEND; // <-- not really needed
 					SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
 					break;
 				}
 
 				case IDC_RESET_IFF:
 				{
-					if( ti[ index ].iIFF == IFF_FRIEND )
+					if( ! ProcessInfo.pExe ) break;
+					if( ProcessInfo.iIFF == IFF_FRIEND )
 					{
-						ti[ index ].iIFF = IFF_UNKNOWN;
 						for( ptrdiff_t i = 0; i < g_numOfFriends; ++i )
 						{
-							if( Lstrcmpi( ti[ index ].szExe, g_lpszFriend[ i ] ) == 0 )
+							if( StrEqualNoCase( ProcessInfo.pExe, g_lpszFriend[ i ] ) )
 							{
-								// $FIX(4/5): see above.
-								Tcscpy_s( g_lpszFriend[ i ], MAX_PATH * 2, g_lpszFriend[ g_numOfFriends - 1 ] );
-
-								*g_lpszFriend[ g_numOfFriends-- ] = _T('\0');
-								
-								//break;
+								if( --g_numOfFriends != i )
+								{
+									HeapFree( GetProcessHeap(), 0, g_lpszFriend[ i ] );
+									g_lpszFriend[ i ] = g_lpszFriend[ g_numOfFriends ];
+								}
+								else
+								{
+									HeapFree( GetProcessHeap(), 0, g_lpszFriend[ g_numOfFriends ] );
+								}
+								g_lpszFriend[ g_numOfFriends ] = NULL;
 							}
 						}
 					}
-					else if( ti[ index ].iIFF == IFF_FOE )
+					else if( ProcessInfo.iIFF == IFF_FOE )
 					{
-						ti[ index ].iIFF = IFF_UNKNOWN;
 						for( ptrdiff_t i = 0; i < g_numOfEnemies; ++i )
 						{
-							// formerly considered as Foe
-							if( Lstrcmpi( ti[ index ].szExe, g_lpszEnemy[ i ] ) == 0 )
+							if( StrEqualNoCase( ProcessInfo.pExe, g_lpszEnemy[ i ] ) )
 							{
-								// $FIX(5/5): see above.
-								Tcscpy_s( g_lpszEnemy[ i ], MAX_PATH * 2, g_lpszEnemy[ g_numOfEnemies - 1 ] );
-
-								*g_lpszEnemy[ g_numOfEnemies-- ] = _T('\0');
-
-								//break;
+								if( --g_numOfEnemies != i )
+								{
+									HeapFree( GetProcessHeap(), 0, g_lpszEnemy[ i ] );
+									g_lpszEnemy[ i ] = g_lpszEnemy[ g_numOfEnemies ];
+								}
+								else
+								{
+									HeapFree( GetProcessHeap(), 0, g_lpszEnemy[ g_numOfEnemies ] );
+								}
+								g_lpszEnemy[ g_numOfEnemies ] = NULL;
 							}
 						}
 					}
 
+					//ProcessInfo.iIFF = IFF_UNKNOWN; // <-- not really needed
 					SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
 					break;
 				}
@@ -1613,7 +1629,7 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 						_T( " the target is frozen by BES.exe (i.e. the process has been suspended and won't resume).\r\n\r\n" )
 						_T( "Such a situation should be quite exceptional, but might happen if BES crashes" )
 						_T( " while being active." ),
-						ti[ index ].szPath, pid );
+						ProcessInfo.szPath, pid );
 					if( MessageBox( hDlg, msg, APP_NAME, 
 							MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2 ) == IDOK )
 					{
@@ -1621,8 +1637,8 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 						Sleep( 1000 );
 						if( Unfreeze( hDlg, pid ) )
 						{
-							MessageBox( hDlg, TEXT( "Successful!" ),
-										TEXT( "Unfreezing" ), MB_ICONINFORMATION | MB_OK );
+							//MessageBox( hDlg, TEXT( "Successful!" ),
+							//			TEXT( "Unfreezing" ), MB_ICONINFORMATION | MB_OK );
 						}
 						else
 						{
@@ -1631,19 +1647,14 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 						}
 					}
 
-					///*lphp->lpTarget = ti[ index ];
-					///EndDialog( hDlg, XLIST_UNFREEZE );
 					break;
 				}
 
-				/*case IDC_SAFETY:
-					break;*/
-
 				case IDC_NUKE:
-					if( ti[ index ].iIFF != IFF_SYSTEM
+					if( ProcessInfo.iIFF != IFF_SYSTEM
 						&& pid != GetCurrentProcessId() )
 					{
-						_nuke( hDlg, ti[ index ] );
+						_nuke( hDlg, ProcessInfo );
 					}
 					break;
 
@@ -1660,10 +1671,10 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 					ShowProcessWindow( hDlg, pid,
 										CtrlID == IDC_HIDE ? BES_HIDE : BES_SHOW );
 
-					if( ! fContextMenu && g_bSelNextOnHide && KEY_UP( VK_SHIFT ) )
+					if( ! fContextMenu && g_bSelNextOnHide && sel + 1 < cItems && KEY_UP( VK_SHIFT ) )
 					{
 						ListView_SetCurrentSel( hLV, sel + 1, TRUE );
-						LV_OnSelChange( hDlg, MetaIndex, ti, cItems, current_IFF );
+						LV_OnSelChange( hDlg, SORTEE, cItems, sel + 1, curIdx, pTarget );
 					}
 					break;
 				}
@@ -1709,20 +1720,28 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 				{
 					NMLISTVIEW& nm = *(NMLISTVIEW*) lParam;
 					if( nm.uNewState & LVIS_FOCUSED )
-						LV_OnSelChange( hDlg, MetaIndex, ti, cItems, current_IFF );
+					{
+						LV_OnSelChange( hDlg, SORTEE, cItems, nm.iItem, curIdx, pTarget );
+					}
 				}
 				else if( notified.code == NM_CLICK || notified.code == NM_RCLICK )
 				{
-					NMITEMACTIVATE& nm =*(NMITEMACTIVATE*) lParam;
-					
-					// nm.iItem is -1 when sub-item is clicked (unless LVS_EX_FULLROWSELECT);
-					// therefore we manually check the index...
+					const NMITEMACTIVATE& nm = *(NMITEMACTIVATE*) lParam;
+					// Unless LVS_EX_FULLROWSELECT, nm.iItem is -1 when a sub-item is clicked;
+					// we can manually check the index.
 					LVHITTESTINFO hit = {0};
 					hit.pt = nm.ptAction;
 					int itemIndex = ListView_SubItemHitTest( notified.hwndFrom, &hit );
-					if( itemIndex == -1 ) break;
 
-					ListView_SetCurrentSel( notified.hwndFrom, itemIndex, TRUE );
+					// Empty space after the text can be "nowhere"; this is a workaround.
+					if( itemIndex == -1 && (hit.flags & LVHT_NOWHERE) )
+					{
+						hit.pt.x = 4L;
+						itemIndex = ListView_SubItemHitTest( notified.hwndFrom, &hit );
+					}
+					
+					if( itemIndex != -1 )
+						ListView_SetCurrentSel( notified.hwndFrom, itemIndex, TRUE );
 				}
 				else if( notified.code == NM_DBLCLK )
 				{
@@ -1732,7 +1751,8 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 				else if( notified.code == NM_CUSTOMDRAW )
 				{
 					// todo ret val
-					return LV_OnCustomDraw( hDlg, notified.hwndFrom, lParam, hot );
+					return LV_OnCustomDraw( hDlg, notified.hwndFrom, lParam,
+											ti, (DWORD) cItems, (DWORD) curIdx );
 				}
 			}
 			else if( notified.code == HDN_ITEMCLICK )
@@ -1758,41 +1778,42 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 		}
 
 		case WM_HSCROLL:
-			if( LOWORD( wParam ) < TB_ENDTRACK
-				&& GetDlgCtrlID( (HWND) lParam ) == IDC_SLIDER )
+			if( GetDlgCtrlID( (HWND) lParam ) != IDC_SLIDER ) break;
+
+			if( LOWORD( wParam ) == TB_ENDTRACK )
 			{
-				HWND hLV = GetDlgItem( hDlg, IDC_TARGET_LIST );
-				LVITEM li;
-				li.mask = LVIF_PARAM;
-				li.iItem = (int) ListView_GetCurrentSel( hLV );
-				li.iSubItem = 0;
-				ListView_GetItem( hLV, &li );
+				SendNotifyIconData( g_hWnd, pTarget, NIM_MODIFY );
+			}
+			else if( LOWORD( wParam ) < TB_ENDTRACK )
+			{
+				ptrdiff_t sel = curIdx;
+				if( sel < 0 || cItems <= sel ) break;
+#ifdef PTRSORT
+				UINT k = lpPtrArr[ sel ]->slotid;
+#else
+				UINT k = ti[ sel ].slotid;
+#endif
 
-				int k = 0;
-				while( k < MAX_SLOTS && g_dwTargetProcessId[ k ] != (DWORD) li.lParam ) ++k;
-				if( k == MAX_SLOTS ) break;
-
+				if( MAX_SLOTS <= k ) break;
 				LRESULT lSlider = SendMessage( (HWND) lParam, TBM_GETPOS, 0, 0 );
-				if( lSlider < SLIDER_MIN || lSlider > SLIDER_MAX )
-					lSlider = SLIDER_DEF;
+				if( lSlider < SLIDER_MIN || lSlider > SLIDER_MAX ) break;
 
 				g_Slider[ k ] = (int) lSlider;
 
-				TCHAR strPercent[ 32 ] = _T("");
+				TCHAR strPercent[ 16 ];
 				GetPercentageString( lSlider, strPercent, _countof(strPercent) );
+
 				SetDlgItemText( hDlg, IDC_TEXT_PERCENT, strPercent );
 			
-				if( g_bHack[ k ]
-					&& ( k < 2 || k == 2 && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE ) )
+				if( k < 3 && g_bHack[ k ] )
 				{
-					
-					_stprintf_s( lphp->lpszStatus[ 0 + 4 * k ], cchStatus,
+					_stprintf_s( ppszStatus[ 0 + 4 * k ], cchStatus,
 								_T( "Target #%d [ %s ]" ),
 								k + 1,
 								strPercent );
 
 					RECT rcStatus;
-					SetRect( &rcStatus, 20, 20 + 90 * k, 479, 40 + 90 * k );
+					SetRect( &rcStatus, 20, 20 + 90 * (int) k, 479, 40 + 90 * (int) k );
 					InvalidateRect( g_hWnd, &rcStatus, FALSE );
 				}
 			}
@@ -1822,21 +1843,21 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 			}
 			else if( idCtrl == IDC_EDIT_INFO )
 			{
-				HWND hLV = GetDlgItem( hDlg, IDC_TARGET_LIST );
-				LVITEM li;
-				li.mask = LVIF_PARAM;
-				li.iItem = (int) ListView_GetCurrentSel( hLV );
-				li.iSubItem = 0;
-				ListView_GetItem( hLV, &li );
-
-				int k = 0;
-				while( k < MAX_SLOTS && g_dwTargetProcessId[ k ] != (DWORD) li.lParam ) ++k;
-				if( k < MAX_SLOTS && g_bHack[ k ] )
+				const ptrdiff_t sel = curIdx;
+				if( 0 <= sel && sel < cItems )
 				{
-					SetBkMode( (HDC) wParam, OPAQUE );
-					SetBkColor( (HDC) wParam, RGB( 0xff, 0, 0 ) );
-					SetTextColor( (HDC) wParam, RGB( 0xff, 0xff, 0xff ) );
-					return (INT_PTR)(HBRUSH) GetSysColorBrush( COLOR_3DFACE );
+#ifdef PTRSORT
+					UINT k = lpPtrArr[ sel ]->slotid;
+#else
+					UINT k = ti[ sel ].slotid;
+#endif
+					if( k < MAX_SLOTS && g_bHack[ k ] )
+					{
+						SetBkMode( (HDC) wParam, OPAQUE );
+						SetBkColor( (HDC) wParam, RGB( 0xff, 0, 0 ) );
+						SetTextColor( (HDC) wParam, RGB( 0xff, 0xff, 0xff ) );
+						return (INT_PTR)(HBRUSH) GetSysColorBrush( COLOR_3DFACE );
+					}
 				}
 			}
 			return (INT_PTR)(HBRUSH) NULL;
@@ -1845,6 +1866,12 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 
 		case WM_PAINT:
 		{
+			int current_IFF = 0;
+#ifdef PTRSORT
+			if( 0 <= curIdx && curIdx < cItems && lpPtrArr ) current_IFF = lpPtrArr[ curIdx ]->iIFF;
+#else
+			if( 0 <= curIdx && curIdx < cItems ) current_IFF = ti[ curIdx ].iIFF;
+#endif
 			RECT rc = {0};
 			GetWindowRect( GetDlgItem( hDlg, IDC_FRIEND ), &rc );
 			MapWindowPoints( NULL, hDlg, (LPPOINT) &rc, 2 );
@@ -1884,10 +1911,10 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 			//HBRUSH hRedBrush = CreateSolidBrush( RGB( 255, 200, 200 ) );
 			SelectBrush( hdc, hBlueBrush );
 
-			GetWindowRect( GetDlgItem( hDlg, IDC_UNLIMIT_ALL ), &rc );
+			GetWindowRect( GetDlgItem( hDlg, IDCANCEL ), &rc );
 			MapWindowPoints( NULL, hDlg, (LPPOINT) &rc, 2 );
-			const int x1 = rc.left + 1;
-			const int x2 = rc.right;
+			const int x1 = rc.left;
+			const int x2 = rc.right - 1;
 
 			GetWindowRect( GetDlgItem( hDlg, IDC_HIDE ), &rc );
 			MapWindowPoints( NULL, hDlg, (LPPOINT) &rc, 2 );
@@ -1924,25 +1951,31 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 
 		case WM_CONTEXTMENU:
 		{
-			if( GetDlgCtrlID( (HWND) wParam ) == IDC_TARGET_LIST )
+			if( GetDlgCtrlID( (HWND) wParam ) == IDC_TARGET_LIST
+				&& 0 <= curIdx && curIdx < cItems && SORTEE )
 			{
 				fContextMenu = true;
-				LV_OnContextMenu( hDlg, (HWND) wParam, lParam, current_IFF );
+#ifdef PTRSORT
+				int current_IFF = lpPtrArr[ curIdx ]->iIFF;
+#else
+				int current_IFF = ti[ curIdx ].iIFF;
+#endif
+				LV_OnContextMenu( hDlg, (HWND) wParam, lParam, current_IFF, curIdx );
 				fContextMenu = false;
 			}
 			break;
 		}
-
+/**
 		case WM_GETICON:
 		case WM_USER_CAPTION:
 		{
-			/*if( wParam == 0 && lpSavedWindowText )
+			if( wParam == 0 && lpSavedWindowText )
 			{
 				TCHAR strCurrentText[ MAX_WINDOWTEXT ] = _T("");
 				GetWindowText( hDlg, strCurrentText, MAX_WINDOWTEXT );
 				if( _tcscmp( strCurrentText, lpSavedWindowText ) != 0 )
 					SendMessage( hDlg, WM_SETTEXT, 0, (LPARAM) lpSavedWindowText );
-			}*/
+			}
 			
 			if( message == WM_USER_CAPTION )
 				break;
@@ -1953,17 +1986,17 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 		
 		case WM_NCUAHDRAWCAPTION:
 		{
-			/*if( lpSavedWindowText )
+			if( lpSavedWindowText )
 			{
 				TCHAR strCurrentText[ MAX_WINDOWTEXT ] = _T("");
 				GetWindowText( hDlg, strCurrentText, (int) _countof(strCurrentText) );
 				if( _tcscmp( strCurrentText, lpSavedWindowText ) != 0 )
 					SendMessage( hDlg, WM_SETTEXT, 0, (LPARAM) lpSavedWindowText );
-			}*/
+			}
 			return FALSE;
 			break;
 		}
-
+**/
 		case WM_NCLBUTTONDBLCLK:
 			fDebug = ! fDebug;
 			return FALSE;
@@ -1980,10 +2013,6 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 			TCHAR str[ 256 ] = _T("");
 			_stprintf_s( str, _countof(str), _T("%ld,%ld"), rc.left, rc.top );
 			WritePrivateProfileString( TEXT( "Window" ), TEXT( "DialogPos" ), str, GetIniPath() );
-
-			// todo race condition: wait until YOU-CAN-READ
-			Sleep(100);
-			UpdateProcessSnap( NULL, NULL, 0, NULL );
 
 			INT arr[ N_COLS ] = {0};
 			ListView_GetColumnOrderArray( GetDlgItem( hDlg, IDC_TARGET_LIST ), N_COLS, arr );
@@ -2019,31 +2048,27 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 				hfontPercent = NULL;
 			}
 
-			/*if( hListBoxBrush )
+#ifdef PTRSORT
+			if( lpPtrArr )
 			{
-				DeleteBrush( hListBoxBrush );
-				hListBoxBrush = NULL;
-			}*/
-
-			if( lpSavedWindowText )
-			{
-				HeapFree( GetProcessHeap(), 0L, lpSavedWindowText );
-				lpSavedWindowText = NULL;
+				HeapFree( GetProcessHeap(), 0, lpPtrArr );
+				lpPtrArr = NULL;
 			}
-
-			if( MetaIndex )
-			{
-				HeapFree( GetProcessHeap(), 0L, MetaIndex );
-				MetaIndex = NULL;
-			}
-
+#endif
 			if( ti )
 			{
-				HeapFree( GetProcessHeap(), 0L, ti );
+				for( ptrdiff_t i = 0; i < cItems; ++i )
+				{
+					if( ti[ i ].szPath ) HeapFree( GetProcessHeap(), 0, ti[ i ].szPath );
+					if( ti[ i ].szText ) HeapFree( GetProcessHeap(), 0, ti[ i ].szText );
+				}
+				HeapFree( GetProcessHeap(), 0, ti );
 				ti = NULL;
 			}
+			cItems = 0; // 20140401
 			
-			lphp = NULL;
+			UpdateProcessSnap( ti, false, NULL, 0 );
+			pTarget = NULL;
 			break;
 		}
 		default:
@@ -2052,10 +2077,9 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
     return TRUE;
 }
 
-static void _nuke( HWND hDlg, const TARGETINFO& target )
+static void _nuke( HWND hDlg, const PROCESSINFO& target )
 {
-	if( target.dwProcessId == GetCurrentProcessId()
-		|| IsProcessBES( target.dwProcessId, NULL, 0 ) )
+	if( IsProcessBES( target.dwProcessId, NULL, 0 ) )
 	{
 		MessageBox( hDlg, target.szPath, TEXT("BES Can't Target BES"), MB_OK | MB_ICONEXCLAMATION );
 		return;
@@ -2084,40 +2108,7 @@ static void _nuke( HWND hDlg, const TARGETINFO& target )
 	}
 }
 
-
-/*DWORD * ListProcessThreads_Alloc( DWORD dwOwnerPID, ptrdiff_t * pNumOfThreads ) //v1.6.x
-{
-	*pNumOfThreads = 0;
-	
-	ptrdiff_t num = 0;
-	
-	DWORD * pThreadIDs = NULL;
-	
-	for( ptrdiff_t maxNumOfThreads = 128; ; maxNumOfThreads *= 2 )
-	{
-		pThreadIDs = (DWORD *) HeapAlloc( GetProcessHeap(), 0L, 
-											(SIZE_T)( sizeof(DWORD) * maxNumOfThreads ) );
-	
-		if( ! pThreadIDs )
-			break;
-
-		num = ListProcessThreads( dwOwnerPID, pThreadIDs, (ptrdiff_t) maxNumOfThreads );
-
-		// All threads have been listed, or there are too many threads
-		if( num < maxNumOfThreads || 32768 <= maxNumOfThreads )
-			break;
-
-		// Free the old memory block before retrying
-		HeapFree( GetProcessHeap(), 0L, pThreadIDs );
-		pThreadIDs = NULL;
-	}
-
-	if( pThreadIDs )
-		*pNumOfThreads = num;
-	
-	return pThreadIDs;
-}*/
-
+/*
 ptrdiff_t ListProcessThreads( DWORD dwOwnerPID, DWORD * pThreadIDs, ptrdiff_t numOfMaxIDs ) 
 {
 	HANDLE hThreadSnap = CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0 );
@@ -2139,23 +2130,78 @@ ptrdiff_t ListProcessThreads( DWORD dwOwnerPID, DWORD * pThreadIDs, ptrdiff_t nu
 	CloseHandle( hThreadSnap );
 	return numOfIDs;
 }
+*/
+DWORD * AllocThreadList( DWORD dwOwnerPID, ptrdiff_t& numOfThreads ) // v1.7.1
+{
+	DWORD * lpRet = NULL;
+	numOfThreads = 0;
+	bool fCachedOperation = false;
+
+	if( WaitForSingleObject( hReconSema, 20 ) == WAIT_OBJECT_0 )
+	{
+		const ptrdiff_t numOfPairs = s_nSortedPairs;
+
+		PROCESS_THREAD_PAIR * sorted_pairs
+			= (PROCESS_THREAD_PAIR *) MemAlloc( sizeof(PROCESS_THREAD_PAIR), (size_t) numOfPairs );
+		
+		if( sorted_pairs && s_lpSortedPairs && numOfPairs )
+		{
+			memcpy( sorted_pairs, s_lpSortedPairs, numOfPairs * sizeof(PROCESS_THREAD_PAIR) );
+			fCachedOperation = true;
+		}
+		
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+
+		if( fCachedOperation )
+		{
+			ptrdiff_t i = 0;
+			while( i < numOfPairs && sorted_pairs[ i ].pid < dwOwnerPID ){ ++i; }
+
+			while( i + numOfThreads < numOfPairs
+					&& sorted_pairs[ i + numOfThreads ].pid == dwOwnerPID ){ ++numOfThreads; }
+			
+			// numOfThreads may be 0.  Don't return NULL just because numOfThreads==0;
+			// doing so would confuse the caller because it would look like out-of-memory.
+			lpRet = (DWORD *) MemAlloc( sizeof(DWORD), (size_t) numOfThreads );
+			if( lpRet )
+			{
+				for( ptrdiff_t n = 0; n < numOfThreads; ++n )
+					lpRet[ n ] = sorted_pairs[ i + n ].tid;
+			}
+			else numOfThreads = 0;
+		}
+
+		if( sorted_pairs )
+			HeapFree( GetProcessHeap(), 0, sorted_pairs );
+	}
+
+	if( ! fCachedOperation )
+	{
+#ifdef _DEBUG
+		OutputDebugString(_T("\t###ListProcessThreads_Alloc###\n"));
+#endif
+		lpRet = ListProcessThreads_Alloc( dwOwnerPID, numOfThreads );
+	}
+
+	return lpRet;
+}
+
 
 DWORD * ListProcessThreads_Alloc( DWORD dwOwnerPID, ptrdiff_t& numOfThreads ) // v1.7.0
 {
 	numOfThreads = 0;
 
-	HANDLE hThreadSnap = CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0 );
-	if( hThreadSnap == INVALID_HANDLE_VALUE )
+	ptrdiff_t maxNumOfThreads = 256;
+	DWORD * lpThreadIDs = (DWORD *) MemAlloc( sizeof(DWORD), (size_t) maxNumOfThreads );
+	if( ! lpThreadIDs )
 	{
 		return NULL;
 	}
 
-	ptrdiff_t maxNumOfThreads = 64; // 256 bytes
-	DWORD * lpThreadIDs = (DWORD *) HeapAlloc( GetProcessHeap(), 0,
-												sizeof(DWORD) * maxNumOfThreads );
-	if( ! lpThreadIDs )
+	HANDLE hThreadSnap = CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0 );
+	if( hThreadSnap == INVALID_HANDLE_VALUE )
 	{
-		CloseHandle( hThreadSnap );
+		MemFree( lpThreadIDs );
 		return NULL;
 	}
 
@@ -2199,13 +2245,16 @@ DWORD * ListProcessThreads_Alloc( DWORD dwOwnerPID, ptrdiff_t& numOfThreads ) //
 	return lpThreadIDs;
 }
 
-static PROCESS_THREAD_PAIR * AllocSortedPairs( ptrdiff_t& numOfPairs )
+CLEAN_POINTER PROCESS_THREAD_PAIR * AllocSortedPairs(
+	ptrdiff_t& numOfPairs,
+	ptrdiff_t prev_num )
 {
 	numOfPairs = 0;
 
-	ptrdiff_t maxNumOfPairs = 2048; // 16 KiB
-	PROCESS_THREAD_PAIR * lpPairs = (PROCESS_THREAD_PAIR *) HeapAlloc( GetProcessHeap(), 0, 
-											sizeof(PROCESS_THREAD_PAIR) * maxNumOfPairs );
+	ptrdiff_t maxNumOfPairs = (prev_num) ? prev_num + 128 : 2048 ;
+
+	PROCESS_THREAD_PAIR * lpPairs
+		= (PROCESS_THREAD_PAIR *) MemAlloc( sizeof(PROCESS_THREAD_PAIR), (size_t) maxNumOfPairs );
 
 	if( ! lpPairs )	return NULL;
 
@@ -2218,7 +2267,9 @@ static PROCESS_THREAD_PAIR * AllocSortedPairs( ptrdiff_t& numOfPairs )
 
 	THREADENTRY32 te32;
 	te32.dwSize = (DWORD) sizeof(THREADENTRY32); 
-	for( BOOL b = Thread32First( hThreadSnap, &te32 ); b; b = Thread32Next( hThreadSnap, &te32 ) )
+	for( BOOL bGoOn = Thread32First( hThreadSnap, &te32 ); 
+			bGoOn;
+			bGoOn = Thread32Next( hThreadSnap, &te32 ) )
 	{
 		if( numOfPairs == maxNumOfPairs )
 		{
@@ -2242,8 +2293,9 @@ static PROCESS_THREAD_PAIR * AllocSortedPairs( ptrdiff_t& numOfPairs )
 			lpPairs = (PROCESS_THREAD_PAIR *) lpv;
 		}
 	
-		lpPairs[ numOfPairs ].pid = te32.th32OwnerProcessID;
 		lpPairs[ numOfPairs ].tid = te32.th32ThreadID;
+		lpPairs[ numOfPairs ].pid = te32.th32OwnerProcessID;
+		//memcpy( lpPairs + numOfPairs, &te32.th32ThreadID, sizeof(DWORD) * 2 );
 		
 		++numOfPairs;
 
@@ -2256,6 +2308,17 @@ static PROCESS_THREAD_PAIR * AllocSortedPairs( ptrdiff_t& numOfPairs )
 		qsort( lpPairs, (size_t) numOfPairs, sizeof(PROCESS_THREAD_PAIR), &pair_comp ); 
 	}
 	
+#if 0//def _DEBUG
+	TCHAR s[100];
+	_stprintf_s(s,100,_T("0x%x (AllocSortedPairs) %d->%d pairs (max %d) %p\n"),
+		GetCurrentThreadId(),
+		prev_num,
+		numOfPairs,
+		maxNumOfPairs,
+		lpPairs);
+	OutputDebugString(s);
+#endif
+
 	return lpPairs;
 }
 
@@ -2273,28 +2336,40 @@ static BOOL CALLBACK EnumThreadWndProc_DetectBES( HWND hwnd, LPARAM lParam )
 	return TRUE;
 }
 
-BOOL IsProcessBES( DWORD dwProcessId, const PROCESS_THREAD_PAIR * pairs, ptrdiff_t numOfPairs )
+BOOL IsProcessBES( DWORD dwProcessID, const PROCESS_THREAD_PAIR * sorted_pairs, ptrdiff_t numOfPairs )
 {
-	if( dwProcessId == 0 || dwProcessId == (DWORD) -1 ) // trivially false
+	if( dwProcessID == 0 || dwProcessID == (DWORD) -1 ) // trivially false
 		return FALSE;
 	
-	if( dwProcessId == GetCurrentProcessId() ) // this instance itself
+	if( dwProcessID == GetCurrentProcessId() ) // this instance itself
 		return TRUE;
 
 	BOOL bThisIsBES = FALSE; // another instance of BES
 	
-	if( pairs )
+	if( sorted_pairs )
 	{
-		for( ptrdiff_t i = 0; (!bThisIsBES) && i < numOfPairs; ++i )
+		ptrdiff_t sx = 0;
+		ptrdiff_t base = 0;
+		while( sx < numOfPairs && sorted_pairs[ sx ].pid < dwProcessID ) ++sx;
+		base = sx;
+		while( sx < numOfPairs && sorted_pairs[ sx ].pid == dwProcessID ) ++sx;
+
+		ptrdiff_t numOfThreads = sx - base;
+		const PROCESS_THREAD_PAIR * pairs = sorted_pairs + base;
+		for( ptrdiff_t i = 0; i < numOfThreads && ! bThisIsBES; ++i )
 			EnumThreadWindows( pairs[ i ].tid, &EnumThreadWndProc_DetectBES, (LPARAM) &bThisIsBES );
 	}
 	else
 	{
-		const ptrdiff_t maxNumOfThreads = 32; // BES doesn't have more than 32 threads####
-		DWORD rgThreadIDs[ maxNumOfThreads ];
-		ptrdiff_t numOfThreads = ListProcessThreads( dwProcessId, rgThreadIDs, maxNumOfThreads );
-		for( ptrdiff_t i = 0; (!bThisIsBES) && i < numOfThreads; ++i )
-			EnumThreadWindows( rgThreadIDs[ i ], &EnumThreadWndProc_DetectBES, (LPARAM) &bThisIsBES );
+		ptrdiff_t numOfThreads = 0;
+		DWORD * lpdwTID = ListProcessThreads_Alloc( dwProcessID, numOfThreads );
+		if( lpdwTID )
+		{
+			for( ptrdiff_t i = 0; i < numOfThreads && ! bThisIsBES; ++i )
+				EnumThreadWindows( lpdwTID[ i ], &EnumThreadWndProc_DetectBES, (LPARAM) &bThisIsBES );
+
+			HeapFree( GetProcessHeap(), 0, lpdwTID );
+		}
 	}
 
 	return bThisIsBES;
@@ -2302,8 +2377,8 @@ BOOL IsProcessBES( DWORD dwProcessId, const PROCESS_THREAD_PAIR * pairs, ptrdiff
 
 static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 {
-	static LPTARGETINFO lpTarget;
-	static TCHAR * lpSavedWindowText = NULL;
+	static PROCESSINFO * lpTarget;
+
 	switch ( message )
 	{
 		case WM_INITDIALOG:
@@ -2312,22 +2387,21 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			TCHAR msg2[ 4096 ] = _T("");
 			TCHAR format[ 1024 ] = _T("");
 
-			lpTarget = (LPTARGETINFO) lParam;
-			lpSavedWindowText = (TCHAR*) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
-													MAX_WINDOWTEXT * sizeof(TCHAR) );
-			if( ! lpTarget || ! lpSavedWindowText )
+			lpTarget = (PROCESSINFO*) lParam;
+
+			if( ! lpTarget )
 			{
 				EndDialog( hDlg, FALSE );
 				break;
 			}
 
+			TCHAR szWindowText[ MAX_WINDOWTEXT ] = _T("");
 #ifdef _UNICODE
 			if( IS_JAPANESE )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					IS_JAPANESEo ? S_JPNo_1001 : S_JPN_1001,
-					-1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					-1, szWindowText, MAX_WINDOWTEXT );
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					lpTarget->fWatch ? S_QUESTION2_JPN : S_QUESTION1_JPN,
 					-1, msg1, 1023
@@ -2338,8 +2412,7 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			else if( IS_FINNISH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_FIN_1001, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_FIN_1001, -1, szWindowText, MAX_WINDOWTEXT );
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					lpTarget->fWatch ? S_QUESTION2_FIN : S_QUESTION1_FIN,
 					-1, msg1, 1023
@@ -2349,8 +2422,7 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			else if( IS_SPANISH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_SPA_1001, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_SPA_1001, -1, szWindowText, MAX_WINDOWTEXT );
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					lpTarget->fWatch ? S_QUESTION2_SPA : S_QUESTION1_SPA,
 					-1, msg1, 1023
@@ -2360,8 +2432,7 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			else if( IS_CHINESE_T )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_CHI_1001T, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_CHI_1001T, -1, szWindowText, MAX_WINDOWTEXT );
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					lpTarget->fWatch ? S_QUESTION2_CHIT : S_QUESTION1_CHIT,
 					-1, msg1, 1023
@@ -2371,8 +2442,7 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			else if( IS_CHINESE_S )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_CHI_1001S, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_CHI_1001S, -1, szWindowText, MAX_WINDOWTEXT );
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					lpTarget->fWatch ? S_QUESTION2_CHIS : S_QUESTION1_CHIS,
 					-1, msg1, 1023
@@ -2382,8 +2452,7 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			else if( IS_FRENCH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
-					S_FRE_1001, -1, lpSavedWindowText, MAX_WINDOWTEXT );
-				SetWindowText( hDlg, lpSavedWindowText );
+					S_FRE_1001, -1, szWindowText, MAX_WINDOWTEXT );
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					lpTarget->fWatch ? S_QUESTION2_FRE : S_QUESTION1_FRE,
 					-1, msg1, 1023
@@ -2396,19 +2465,18 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 				_tcscpy_s( msg1, _countof(msg1), lpTarget->fWatch ?
 					_T( S_QUESTION2_ASC ) : _T( S_QUESTION1_ASC ) );
 				_tcscpy_s( format, _countof(format), _T( S_FORMAT2_ASC ) );
-
-				_tcscpy_s( lpSavedWindowText, MAX_WINDOWTEXT, _T( "Confirmation" ) );
-				SetWindowText( hDlg, lpSavedWindowText );
+				_tcscpy_s( szWindowText, MAX_WINDOWTEXT, _T( "Confirmation" ) );
 			}
+			SetWindowText( hDlg, szWindowText );
 
 			_stprintf_s( msg2, _countof(msg2), format,
 				lpTarget->szPath,
 				lpTarget->dwProcessId, lpTarget->dwProcessId,
-				lpTarget->szText[ 0 ] ? lpTarget->szText : _T( "n/a" )
+				lpTarget->szText ? lpTarget->szText : _T( "n/a" )
 			);
 
 			SendDlgItemMessage( hDlg, IDC_MSG1, WM_SETFONT, (WPARAM) g_hFont, MAKELPARAM( FALSE, 0 ) );
-			//SendDlgItemMessage( hDlg, IDC_EDIT, WM_SETFONT, (WPARAM) hFont, MAKELPARAM( FALSE, 0 ) );
+
 			SetDlgItemText( hDlg, IDC_MSG1, msg1 );
 			SetDlgItemText( hDlg, IDC_EDIT, msg2 );
 			
@@ -2431,7 +2499,7 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			}
 			break;
 		}
-
+/**
 		case WM_GETICON:
 		case WM_USER_CAPTION:
 		{
@@ -2462,13 +2530,13 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			return FALSE;
 			break;
 		}
-
+**/
 		case WM_DESTROY:
-			if( lpSavedWindowText )
+			/**if( lpSavedWindowText )
 			{
 				HeapFree( GetProcessHeap(), 0L, lpSavedWindowText );
 				lpSavedWindowText = NULL;
-			}
+			}**/
 			break;
 
 		default:
@@ -2482,11 +2550,28 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 bool IsAbsFoe( LPCTSTR strPath )
 {
 	const TCHAR * pntr = _tcsrchr( strPath, _T('\\') );
-	return IsAbsFoe2( pntr ? pntr + 1 : strPath, strPath );
+	return IsAbsFoe2( (pntr && pntr[ 1 ]) ? pntr + 1 : strPath, strPath );
 }
 
-static bool IsAbsFoe2( LPCTSTR strExe, LPCTSTR strPath )
+static bool IsAbsFoe2( const TCHAR * pExe, const TCHAR * szPath )
 {
+	return
+			(
+				_tcsicmp( _T( "lame.exe" ), pExe ) == 0
+					||
+				_tcsicmp( _T( "aviutl.exe" ), pExe ) == 0
+					||
+				_tcsicmp( _T( "virtualdub.exe" ), pExe ) == 0
+		//			||
+		//		_tcsicmp( _T( "virtualdubmod.exe" ), pExe ) == 0
+		//			||
+		//		_tcsicmp( _T( "ffmpeg.exe" ), pExe ) == 0
+					||
+				_tcsstr( szPath, _T( "VirtualDub" )  ) != NULL
+					||
+				_tcsncmp( pExe, _T("x264"), 4 ) == 0
+		);
+#if 0
 	bool fRetVal = false;
 	size_t cchExe = _tcslen( strExe );
 	TCHAR * lpExe = (TCHAR*) HeapAlloc( GetProcessHeap(), 0L, ( cchExe + 1 ) * sizeof(TCHAR) );
@@ -2525,6 +2610,7 @@ static bool IsAbsFoe2( LPCTSTR strExe, LPCTSTR strPath )
 	}
 	
 	return fRetVal;
+#endif
 }
 
 static BOOL CALLBACK GetImportantText_EnumProc( HWND hwnd, LPARAM lParam )
@@ -2553,4 +2639,498 @@ static BOOL CALLBACK GetImportantText_EnumProc( HWND hwnd, LPARAM lParam )
 	}
 
 	return TRUE;
+}
+
+
+void CachedList_Refresh( DWORD msMaxWait )
+{
+#ifdef _DEBUG
+LARGE_INTEGER li0;
+QueryPerformanceCounter(&li0);
+#endif
+
+	// Get the newest info into the local variable.
+	// Getting the result directly into s_lpSortedPairs is also doable, but then it must be
+	// sema-protected, and the sema will be held for like 10 ms because AllocSortedPairs is slow;
+	// which means that other threads may have to wait for 10 ms; it's not a good idea.
+	// We get the result first into the local variable, and then, while sema-protected,
+	// update s_lpSortedPairs (that's very quick; it's just memcpy).
+	ptrdiff_t numOfPairs = 0;
+	PROCESS_THREAD_PAIR * sorted_pairs = AllocSortedPairs( numOfPairs, s_nSortedPairs );
+
+	// Wait until we can read/write
+	if( WaitForSingleObject( hReconSema, msMaxWait ) == WAIT_OBJECT_0 )
+	{
+		// Free the old memory block
+		if( s_lpSortedPairs )
+			HeapFree( GetProcessHeap(), 0, s_lpSortedPairs );
+
+		// Create a new one
+		s_lpSortedPairs
+			= (PROCESS_THREAD_PAIR *) MemAlloc( sizeof(PROCESS_THREAD_PAIR), (size_t) numOfPairs );
+
+		if( s_lpSortedPairs && sorted_pairs )
+		{
+			memcpy( s_lpSortedPairs, sorted_pairs, sizeof(PROCESS_THREAD_PAIR) * numOfPairs );
+			s_nSortedPairs = numOfPairs;
+		}
+		else
+		{
+			s_nSortedPairs = 0;
+		}
+
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+
+#ifdef _DEBUG
+		OutputDebugString(_T("CachedList_Refresh\n"));
+#endif
+	}
+
+	// Free the local list
+	if( sorted_pairs )
+		HeapFree( GetProcessHeap(), 0, sorted_pairs );
+
+#ifdef _DEBUG
+LARGE_INTEGER li;
+QueryPerformanceCounter(&li);
+LARGE_INTEGER freq;
+QueryPerformanceFrequency( &freq );
+TCHAR s[100];
+SYSTEMTIME st;GetSystemTime(&st);
+_stprintf_s(s,100,
+			_T("%02d:%02d:%02d.%03d Refresh: %.2f ms\n"),
+			st.wHour,st.wMinute,st.wSecond,st.wMilliseconds,
+(double)(li.QuadPart-li0.QuadPart)/freq.QuadPart*1000.0);
+OutputDebugString(s);
+#endif
+}
+
+static bool TheKeysAreDown( void )
+{
+	// Ctrl+NumLock+Num3
+	return ( (unsigned int)(USHORT) GetAsyncKeyState( VK_PAUSE ) & 0x8000 ) 
+		&&
+	( (unsigned int)(USHORT) GetAsyncKeyState( VK_NUMPAD3 ) & 0x8000 )
+		&&
+	( (unsigned int)(USHORT) GetAsyncKeyState( VK_CONTROL ) & 0x8000 );
+}
+
+// This guy destroys the cache at the end. So don't use the cache operation unless
+// you start this thread (if you do, operation itself will be ok, but the memory block
+// is not freed).
+unsigned __stdcall ReconThread( void * pv )
+{
+	Sleep( 250 ); // start slowly
+	SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL );
+
+	setlocale( LC_ALL, "English_us.1252" ); // _tcsicmp doesn't work properly in the "C" locale
+
+	HANDLE hEvent_Exiting = (HANDLE) pv;
+
+	WriteDebugLog(_T("Recon thread started"));
+	HANDLE hToken = NULL;
+	DWORD dwPrevAttributes = 0;
+	BOOL bPriv = EnableDebugPrivilege( &hToken, &dwPrevAttributes );
+
+	while( ( WaitForSingleObject( hEvent_Exiting, 10000 ) ) == WAIT_TIMEOUT ) // 10 secs
+	{
+		if( TheKeysAreDown() )
+		{
+			for( ptrdiff_t e = 0; e < MAX_SLOTS; ++e )
+			{
+				g_bHack[ e ] = FALSE;
+				if( hChildThread[ e ] )
+				{
+					CloseHandle( hChildThread[ e ] );
+					hChildThread[ e ] = NULL;
+				}
+				ReleaseSemaphore( hSemaphore[ e ], 1L, NULL );
+			}
+			MessageBox(NULL,_T("Ctrl+MumLock+Num3 detected!"),APP_NAME,MB_OK|MB_TOPMOST);
+		}
+
+		ptrdiff_t i = 0;
+		for( ; i < MAX_SLOTS; ++i ) { if( g_bHack[ i ] ) break; }
+
+		if( i < MAX_SLOTS )
+		{
+#ifdef _DEBUG
+WriteDebugLog(_T("(Recon)"));
+#endif
+			CachedList_Refresh( 1000 );
+		}
+	}
+
+	WaitForSingleObject( hReconSema, 3000 );
+	s_nSortedPairs = 0;
+	if( s_lpSortedPairs )
+	{
+		HeapFree( GetProcessHeap(), 0, s_lpSortedPairs );
+		s_lpSortedPairs = NULL;
+	}
+
+	extern PATHINFO g_arPathInfo[ MAX_WATCH ];
+	extern ptrdiff_t g_nPathInfo;
+
+	for( ptrdiff_t n = 0; n < MAX_WATCH; ++n )
+	{
+		if( g_arPathInfo[ n ].pszPath )
+		{
+			TcharFree( g_arPathInfo[ n ].pszPath );
+			g_arPathInfo[ n ].pszPath = NULL;
+		}
+	}
+
+	g_nPathInfo = 0; // TODO: is this ok?
+
+	ReleaseSemaphore( hReconSema, 1L, NULL );
+
+	if( hToken )
+	{
+		if( bPriv ) 
+			AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
+
+		CloseHandle( hToken );
+	}
+
+#ifdef _DEBUG
+	return 7;
+#else
+	return 0;
+#endif
+}
+
+bool ProcessExists( DWORD dwPID )
+{
+	CachedList_Refresh( 1000 );
+
+	bool fRetVal = false;
+	PROCESS_THREAD_PAIR * sorted_pairs = NULL;
+	bool fCachedOperation = false;
+	ptrdiff_t numOfPairs = 0;
+	if( WaitForSingleObject( hReconSema, 100 ) == WAIT_OBJECT_0 )
+	{
+		numOfPairs = s_nSortedPairs;
+		sorted_pairs = (PROCESS_THREAD_PAIR*) HeapAlloc( GetProcessHeap(), 0, 
+														numOfPairs * sizeof(PROCESS_THREAD_PAIR) );
+		
+		if( sorted_pairs && s_lpSortedPairs && numOfPairs )
+		{
+			memcpy( sorted_pairs, s_lpSortedPairs, numOfPairs * sizeof(PROCESS_THREAD_PAIR) );
+			fCachedOperation = true;
+		}
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+	}
+
+	if( fCachedOperation )
+	{
+		ptrdiff_t i = 0;
+		while( i < numOfPairs && sorted_pairs[ i ].pid < dwPID ){ ++i; }
+		fRetVal = ( i < numOfPairs && sorted_pairs[ i ].pid == dwPID );
+	}
+
+	if( sorted_pairs )
+		HeapFree( GetProcessHeap(), 0, sorted_pairs );
+
+	return fRetVal;
+}
+
+#if 0
+DWORD PathToProcessID_Cached(
+	const PATHINFO * arPathInfo,
+	ptrdiff_t nPathInfo,
+	const DWORD * pdwExcluded,
+	ptrdiff_t nExcluded,
+	TCHAR ** ppPath,
+	ptrdiff_t * px )
+{
+	if( ppPath ) *ppPath = NULL;
+	if( px ) *px = -1;
+
+	PROCESS_THREAD_PAIR * sorted_pairs = NULL;
+	bool fCachedOperation = false;
+	ptrdiff_t numOfPairs = 0;
+	if( WaitForSingleObject( hReconSema, 100 ) == WAIT_OBJECT_0 )
+	{
+		numOfPairs = s_nSortedPairs;
+		sorted_pairs = (PROCESS_THREAD_PAIR*) HeapAlloc( GetProcessHeap(), 0, 
+														numOfPairs * sizeof(PROCESS_THREAD_PAIR) );
+		
+		if( sorted_pairs && s_lpSortedPairs && numOfPairs )
+		{
+			memcpy( sorted_pairs, s_lpSortedPairs, numOfPairs * sizeof(PROCESS_THREAD_PAIR) );
+			fCachedOperation = true;
+		}
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+	}
+
+	if( ! fCachedOperation )
+	{
+		if( sorted_pairs ) HeapFree( GetProcessHeap(), 0, sorted_pairs );
+		return PathToProcessID( arPathInfo, nPathInfo, pdwExcluded, nExcluded, ppPath, px );
+	}
+
+	DWORD pid = 0;
+	ptrdiff_t found_index = -1;
+	for( ptrdiff_t i = 0; i < numOfPairs && found_index == -1; ++i )
+	{
+		if( sorted_pairs[ i ].pid == 0 || sorted_pairs[ i ].pid == pid )
+			continue;
+
+		pid = sorted_pairs[ i ].pid;
+
+		if( pdwExcluded )
+		{
+			ptrdiff_t n = 0;
+			for( ; n < nExcluded; ++n ){ if( pdwExcluded[ n ] == pid ) break; }
+			if( n < nExcluded ) continue;
+		}
+
+		found_index = pid_has_this_path( pid, arPathInfo, nPathInfo, ppPath );
+	}
+
+	HeapFree( GetProcessHeap(), 0, sorted_pairs );
+
+	if( found_index == -1 ) return (DWORD) -1;
+
+	if( px ) *px = found_index;
+	return pid;
+}
+#endif
+
+bool PathEqual( const PATHINFO& pathInfo, const TCHAR * lpPath, size_t cch, bool fSafe )
+{
+	if( ! pathInfo.pszPath ) return false;
+
+	bool fRet = false;
+	if( pathInfo.cchHead || pathInfo.cchTail )
+	{
+		if( pathInfo.cchHead + pathInfo.cchTail <= cch
+			&& ! _tcsncicmp( pathInfo.pszPath, lpPath, pathInfo.cchHead ) )
+		{
+			fRet = StrEqualNoCase( &pathInfo.pszPath[ pathInfo.cchHead + 1 ], 
+									&lpPath[ cch - pathInfo.cchTail ] );
+		}
+#if 1
+		if( fRet && fSafe ) // if (fSafe): No wildcard matching if the target (lpPath) is in the Windows Directory or the System Directory
+		{
+			TCHAR szWinDir[ MAX_PATH ] = _T("");
+			size_t cchWinDir = GetWindowsDirectory( szWinDir, MAX_PATH );
+			TCHAR szSysDir[ MAX_PATH ] = _T("");
+			size_t cchSysDir = GetSystemDirectory( szSysDir, MAX_PATH );
+			if( ( cchWinDir && cchWinDir < MAX_PATH && ! _tcsncicmp( lpPath, szWinDir, cchWinDir ) )
+				||
+				( cchSysDir && cchSysDir < MAX_PATH && ! _tcsncicmp( lpPath, szSysDir, cchSysDir ) )
+			) fRet = false;
+		}
+#endif
+	}
+	else
+	{
+		fRet = ( cch == pathInfo.cchPath && StrEqualNoCase( pathInfo.pszPath, lpPath ) );
+	}
+
+	return fRet;
+}
+
+static ptrdiff_t pid_has_this_path(
+	DWORD pid,
+	const PATHINFO * arPathInfo,
+	ptrdiff_t nPathInfo,
+	TCHAR ** ppPath )
+{
+	ptrdiff_t ret = -1;
+	HANDLE hProcess = OpenProcess( PROCESS_QUERY_INFORMATION, FALSE, pid );
+	if( hProcess )
+	{
+		size_t cch;
+		TCHAR * lpPath = ProcessToPath_Alloc( hProcess, &cch );
+		if( lpPath )
+		{
+			for( ptrdiff_t n = 0; n < nPathInfo && ret == -1; ++n )
+			{
+				if( PathEqual( arPathInfo[ n ], lpPath, cch, true ) ) ret = n;
+			}
+
+			if( ret != -1 && ppPath )
+				*ppPath = lpPath;
+			else
+				HeapFree( GetProcessHeap(), 0, lpPath );
+		}
+		CloseHandle( hProcess );
+	}
+	return ret;
+}
+
+CLEAN_POINTER PROCESS_THREAD_PAIR * GetCachedPairs( DWORD msWait, ptrdiff_t& numOfPairs )
+{
+	PROCESS_THREAD_PAIR * sorted_pairs = NULL;
+	numOfPairs = 0;
+	if( WaitForSingleObject( hReconSema, msWait ) == WAIT_OBJECT_0 )
+	{
+		sorted_pairs = (PROCESS_THREAD_PAIR*)
+						MemAlloc( sizeof(PROCESS_THREAD_PAIR), (size_t) s_nSortedPairs );
+
+		if( sorted_pairs && s_lpSortedPairs && s_nSortedPairs )
+		{
+			memcpy( sorted_pairs, s_lpSortedPairs, sizeof(PROCESS_THREAD_PAIR) * (size_t) s_nSortedPairs );
+			numOfPairs = s_nSortedPairs;
+		}
+
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+	}
+
+	return sorted_pairs;
+}
+
+DWORD ParsePID( const TCHAR * strTarget ) // v1.7.5
+{
+	// Do nothing if it's not starting with "pid:"
+	if( _tcsncmp( strTarget, _T("pid:"), 4 ) != 0 ) return 0UL;
+
+	const TCHAR * strNumber = strTarget + 4;
+
+	DWORD pid = 0UL;
+
+	// OK if it does not contain "-" (i.e. a negative number is bad)
+	if( _tcschr( strNumber, _T('-') ) == NULL )
+	{
+		// "0x" or "0X" will be parsed as a hex
+		int radix = ( _tcschr( strNumber, _T('x') ) || _tcschr( strNumber, _T('X') ) ) ? 16 : 10 ;
+
+		TCHAR * endptr;
+
+		_set_errno( 0 );
+		pid = _tcstoul( strNumber, &endptr, radix );
+		if( errno == ERANGE ) pid = 0UL; // Not OK if overflows
+		else
+		{
+#ifdef _UNICODE
+			while( iswspace( *endptr ) ) ++endptr; // skip the trailing spaces if any
+#else
+			while( isspace( (unsigned char) *endptr ) ) ++endptr; // skip the trailing spaces if any
+#endif
+			if( *endptr != _T('\0') ) pid = 0UL; // Not OK if there is an unexpected char
+		}
+	}
+
+	if( ! pid )
+	{
+		TCHAR str[ 128 ] = _T("");
+		_sntprintf_s( str, _countof(str), _TRUNCATE, _T( "[ERROR] couldn't parse \"%s\"" ), strTarget );
+		WriteDebugLog( str );
+	}
+
+	return pid;
+}
+
+TCHAR * PIDToPath_Alloc( DWORD dwProcessID, size_t * pcch ) // v1.7.5
+{
+	if( ! dwProcessID ) return NULL;
+
+	TCHAR * lpPath = NULL;
+
+	HANDLE hProcess = OpenProcess( PROCESS_QUERY_INFORMATION, FALSE, dwProcessID );
+
+	if( hProcess )
+	{
+		size_t cch;
+		lpPath = ProcessToPath_Alloc( hProcess, &cch );
+		if( pcch ) *pcch = cch;
+
+		CloseHandle( hProcess );
+	}
+	else
+	{
+		TCHAR str[ 128 ] = _T("");
+		_stprintf_s( str, _countof(str), _T( "[ERROR] OpenProcess failed!  ProcessID=%lu" ), dwProcessID );
+		WriteDebugLog( str );
+	}
+
+	return lpPath;
+}
+
+BOOL LimitProcess_NoWatch( HWND hDlg, TARGETINFO * pTarget, PROCESSINFO& ProcessInfo, const int * aiParams ) // v1.7.5
+{
+	ptrdiff_t iMyId;
+
+	for( iMyId = 0; iMyId < MAX_SLOTS; ++iMyId )
+	{
+		if( iMyId == 3 ) continue;
+		if( ! g_bHack[ iMyId ] && WaitForSingleObject( hSemaphore[ iMyId ], 100 ) == WAIT_OBJECT_0 ) break;
+	}
+
+	if( iMyId == MAX_SLOTS )
+	{
+		MessageBox( hDlg, TEXT("Semaphore Error"), APP_NAME, MB_OK | MB_ICONSTOP );
+		return FALSE;
+	}
+
+	if( ! TiFromPi( pTarget[ iMyId ], ProcessInfo ) )
+	{
+		ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
+		return FALSE;
+	}
+
+	if( aiParams )
+	{
+		if( aiParams[ 0 ] != -1 ) pTarget[ iMyId ].wCycle = (WORD) aiParams[ 0 ];
+		if( aiParams[ 1 ] != -1 ) pTarget[ iMyId ].wDelay = (WORD) aiParams[ 1 ];
+	}
+
+	g_Slider[ iMyId ] = GetSliderIni( ProcessInfo.szPath, g_hWnd );
+
+	SendMessage( g_hWnd, WM_USER_HACK, (WPARAM) iMyId, (LPARAM) &pTarget[ iMyId ] );
+
+	return TRUE;
+}
+
+BOOL LimitPID( HWND hWnd, TARGETINFO * pTarget, const DWORD pid, int iSlider, BOOL bUnlimit, const int * aiParams ) // v1.7.5
+{
+	if( ! pid ) return FALSE;
+
+	ptrdiff_t g = 0;  // if the target is new, g = MAX_SLOTS
+	while( g < MAX_SLOTS && ( g == 3 || pid != pTarget[ g ].dwProcessId ) ) ++g;
+
+	if( g < MAX_SLOTS )
+	{
+		// update param(s)
+		if( SLIDER_MIN <= iSlider && iSlider <= SLIDER_MAX ) g_Slider[ g ] = iSlider;
+
+		if( aiParams )
+		{
+			if( aiParams[ 0 ] != -1 ) pTarget[ g ].wCycle = (WORD) aiParams[ 0 ];
+			if( aiParams[ 1 ] != -1 ) pTarget[ g ].wDelay = (WORD) aiParams[ 1 ];
+		}
+
+		if( bUnlimit )
+		{
+			if( g_bHack[ g ] )
+			{
+				g_bHack[ g ] = FALSE;
+				SendMessage( hWnd, WM_USER_STOP, (WPARAM) g, STOPF_UNLIMIT );
+			}
+		}
+		else if( ! g_bHack[ g ] ) // relimit
+		{
+			SendMessage( hWnd, WM_USER_RESTART, (WPARAM) g, 0 );
+		}
+
+		return TRUE;
+	}
+
+	PROCESSINFO pi;
+	ZeroMemory( &pi, sizeof(PROCESSINFO) );
+
+	pi.dwProcessId = pid;
+	pi.szPath = PIDToPath_Alloc( pid, NULL );
+	if( ! pi.szPath ) return FALSE;
+
+	SetSliderIni( pi.szPath, iSlider );
+
+	BOOL bRet = LimitProcess_NoWatch( hWnd, pTarget, pi, aiParams );
+
+	TcharFree( pi.szPath );
+
+	return bRet;
 }

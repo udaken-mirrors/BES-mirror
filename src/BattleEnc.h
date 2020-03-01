@@ -1,62 +1,57 @@
-#if !defined(BATTLEENC_H)
+/* 
+ *	Copyright (C) 2005-2017 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
 
+#if !defined(BATTLEENC_H)
 #define BATTLEENC_H
 
-#if defined(_MSC_VER) && _MSC_VER > 1000
-	#pragma once
-#endif
 
-//#undef  _WIN32_WINNT
-//#undef _WIN32_IE
+#if defined(_MSC_VER) && _MSC_VER > 1000
+# pragma once
+#endif
 #define _WIN32_IE 0x0500 // required for NOTIFYICONDATA ...0x0501 = _WIN32_IE_WIN2KSP4(?)
 #define WINVER 0x0500
 #define _WIN32_WINNT 0x0500 // Windows 2000
 #define NTDDI_VERSION NTDDI_WIN2K
-
 #define _WIN32_WINDOWS 0x0500
-
 #define _CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES 0
-
 #define APP_CLASS TEXT( "BATTLEENC" )
-
-#define MB_CUTE 0x0UL
-// This may not work (Win2K SP4 required):
-//#define MB_CUTE MB_ERR_INVALID_CHARS //0x00000008
-
 #ifdef _UNICODE
-	#define APP_NAME L"BES \x2014 Battle Encoder Shiras\x00E9"
-	#define APP_LONGNAME L"BES \x2014 Battle Encoder Shiras\x00E9 1.7.0-alpha"
+# define APP_NAME L"BES \x2014 Battle Encoder Shiras\x00E9"
+# define APP_LONGNAME L"BES \x2014 Battle Encoder Shiras\x00E9 1.7.7"
 #else
-	#define APP_NAME "BES - Battle Encoder Shirase"
-	#define APP_LONGNAME "BES - Battle Encoder Shirase 1.7.0-alpha"
+# define APP_NAME "BES - Battle Encoder Shirase"
+# define APP_LONGNAME "BES - Battle Encoder Shirase 1.7.7"
 #endif
-
 #define APP_HOME_URL TEXT( "http://mion.faireal.net/BES/" )
-
 #ifdef _MBCS
-	#undef _MBCS
+# undef _MBCS
 #endif
 
 #ifdef _UNICODE
-	#ifndef UNICODE
-		#define UNICODE
-	#endif
-	#define APP_COPYRIGHT L"Copyright \251 2004" L"\x2013" L"2014 mion"
+# ifndef UNICODE
+#  define UNICODE
+# endif
+# define APP_COPYRIGHT L"Copyright \251 2004" L"\x2013" L"2017 mion"
 #else
-	#ifdef UNICODE
-		#undef UNICODE
-	#endif
-	#define APP_COPYRIGHT "Copyright (c) 2004-2014 mion"
+# ifdef UNICODE
+#  undef UNICODE
+# endif
+# define APP_COPYRIGHT "Copyright (c) 2004-2017 mion"
 #endif
 
 #ifdef _UNICODE
-#define WorA_ "W"
+# define WorA_ "W"
 #else
-#define WorA_ "A"
+# define WorA_ "A"
 #endif
 
 #if defined (_MSC_VER) && _MSC_VER < 1400
-	#pragma warning (disable:4514) // unreferenced inline function has been removed
+ # pragma warning (disable:4514) // unreferenced inline function has been removed
+ # pragma warning (disable:4711) // selected for automatic inline expansion
 #endif
 
 #pragma warning (push)
@@ -81,25 +76,33 @@
 
 #include <errno.h>
 #ifndef STRUNCATE
-#define STRUNCATE       80
+# define STRUNCATE       80
 #endif
+
+#pragma warning (pop)
 
 #include "resource.h"
 #include "strings.utf8.h"
 #include "sstp.sjis.h"
-#pragma warning (pop)
+
+#if defined(_MSC_VER) && (defined(_M_IA64) && _MSC_FULL_VER >= 13102050 || _MSC_VER >= 1400)
+# define CLEAN_POINTER _declspec(restrict)  /* _CRTRESTRICT */
+#else
+# define CLEAN_POINTER
+#endif
 
 #define WATCHING_IDLE      ( (DWORD) -1 )
 #define TARGET_PID_NOT_SET          ( 0UL )
 #define TARGET_UNDEF ( TEXT( "<target not specified>" ) )
 
-#define JUST_UPDATE_STATUS          ( 3U )
+#define JUST_UPDATE_STATUS          (0xDA00)
 
-#define MAX_SLOTS (3)
+#define MAX_SLOTS (400)
+#define MAX_WATCH 8
 
-//#define MAX_THREAD_CNT  128
-#define MAX_PROCESS_CNT  256
-//#define MAX_WINDOWTEXT 1024
+#define MAX_ENEMY_CNT   256
+#define MAX_FRIEND_CNT  256
+
 #define MAX_WINDOWTEXT 256
 #define CCHPATH   (MAX_PATH*2)
 #define CCHPATHEX (MAX_PATH*2+20)
@@ -107,14 +110,16 @@
 #define UNIT_MAX 400
 #define UNIT_MIN 2
 #define UNIT_DEF 100
+#define DELAY_MIN 0
+#define DELAY_MAX 60000
 
 #define ALLOW100 TRUE
 
 #define SLIDER_MIN 1
 #if ALLOW100
-#define SLIDER_MAX 109
+# define SLIDER_MAX 109
 #else
-#define SLIDER_MAX 108
+# define SLIDER_MAX 108
 #endif
 #define SLIDER_DEF 33
 
@@ -124,12 +129,18 @@
 	#define CP_UTF8 65001U
 #endif
 
+
+// This may not work (Win2K SP4 required):
+//#define MB_CUTE MB_ERR_INVALID_CHARS //0x00000008
+#define MB_CUTE 0x0UL
+
+
 #ifndef CREARTYPE_QUALITY
 	#define CLEARTYPE_QUALITY 5
 #endif
 
 
-#define SURROGATE_LO( wc ) ( ( (WCHAR) wc ) >= 0xDC00 && ( (WCHAR) wc ) <= 0xDFFF )
+
 
 #ifndef UNREFERENCED_PARAMETER
 	#define UNREFERENCED_PARAMETER(P)((P))
@@ -166,7 +177,7 @@
 #define XLIST_UNFREEZE           4096
 
 // These values may also be used as LOWORD of lp of WM_USER_STOP (as notification)
-#define STOP_FROM_TRAY     0x000A
+//#define STOP_FROM_TRAY     0x000A
 #define NORMAL_TERMINATION 0x1000
 #define NOT_WATCHING       0x1001
 #define THREAD_NOT_OPENED  0xEEEE
@@ -174,7 +185,8 @@
 // These flags may be used as HIWORD of lp of WM_USER_STOP
 #define STOPF_NO_INVALIDATE 0x00010000
 #define STOPF_NO_LV_REFRESH 0x00020000
-
+#define STOPF_UNLIMIT       0x00040000
+#define STOPF_LESS_FLICKER  0x00080000
 #define UNWATCH_NOW -2
 
 #define WM_USER_HACK       ( WM_APP +   1U )
@@ -299,10 +311,26 @@ int _snwprintf_s(
    const wchar_t *format,
       ... 
 );
+
+errno_t wcsncat_s(
+   wchar_t *strDest,
+   size_t numberOfElements,
+   const wchar_t *strSource,
+   size_t count
+);
+errno_t strncat_s(
+   char *strDest,
+   size_t numberOfElements,
+   const char *strSource,
+   size_t count
+);
+
 #if defined(_UNICODE)
 #define _tcsncpy_s   wcsncpy_s
+#define _tcsncat_s   wcsncat_s
 #else
 #define _tcsncpy_s   strncpy_s
+#define _tcsncat_s   strncat_s
 #endif
 
 
@@ -315,30 +343,26 @@ int _snwprintf_s(
 #endif // < VC2005
 
 typedef struct tagTargetInfo {
-	TCHAR szExe[ CCHPATH ];
-	TCHAR szPath[ CCHPATH ];
-	TCHAR szText[ MAX_WINDOWTEXT ];
-	ULONGLONG CPUTime;
+	TCHAR * lpPath;
+	HANDLE _hSync;
 	
+	TCHAR * disp_path;
 	DWORD dwProcessId;
-	int iIFF;
-	float _cpu;
-
-	DWORD numOfThreads;
+	
+	int slotid;
 	bool fWatch;
 	bool fRealTime;
-	bool fThisIsBES;
-	bool dummy[5];
-} TARGETINFO, *LPTARGETINFO;
+	bool fUnlimited;
+	bool fSync;
 
-typedef struct tagHackParams {
-	LPTARGETINFO lpTarget;
-	LPTSTR lpszStatus[ 16 ];
-	//HWND myHwnd;
-	int iMyId;
-	int dummy;
-} HACK_PARAMS, *LPHACK_PARAMS;
-#define cchStatus ((size_t)(MAX_PATH*2))
+	WORD wCycle;
+	WORD wDelay;
+
+} TARGETINFO;
+
+#define cchStatus (128)
+
+BOOL TiCopyFrom( TARGETINFO& ti, const TARGETINFO& ti0 );
 
 // --- WM_COPYDATA related ---
 #define BES_COPYDATA_ID (0xBA1EC0DEul)
@@ -359,62 +383,87 @@ typedef struct tagBesCopyData {
 } BES_COPYDATA, *LPBES_COPYDATA;
 // --- WM_COPYDATA related END ---
 
-unsigned __stdcall Hack( LPVOID dwTargetProcessId );
+unsigned __stdcall Hack( void * pv );
+bool IsActive( void );
 
-BOOL SelectWatch( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp );
-BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp, LPCTSTR lpszTargetPath, LPCTSTR lpszTargetExe );
+BOOL SelectWatch( HWND hWnd, TARGETINFO * pti );
+BOOL SetTargetPlus( HWND hWnd, TARGETINFO * pti, const TCHAR * pszTargetPath, int iSlider, const int * aiParams = NULL );
 
 BOOL Unfreeze( HWND hWnd, DWORD dwProcessID );
 
 INT_PTR CALLBACK xList(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 
-DWORD PathToProcessID( const TCHAR * pPath, const DWORD * pdwExcluded = NULL, ptrdiff_t nExcluded = 0 );
+typedef struct tagPathInfo {
+	TCHAR * pszPath;
+	size_t cchPath;
+	size_t cchHead;
+	size_t cchTail;
+	int slider;
+	WORD wCycle;
+	WORD wDelay;
+} PATHINFO;
 
-BOOL PathToExe( LPCTSTR strPath, LPTSTR lpszExe, int iBufferSize );
-BOOL PathToExe( LPTSTR strPath );
-BOOL PathToExeEx( LPTSTR strPath, int iBufferSize );
+DWORD PathToProcessID(
+	const PATHINFO * arPathInfo,
+	ptrdiff_t nPathInfo,
+	const DWORD * pdwExcluded,
+	ptrdiff_t nExcluded,
+	TCHAR ** ppPath,
+	ptrdiff_t * px );
+DWORD PathToProcessID_Cached(
+ 	const PATHINFO * arPathInfo,
+	ptrdiff_t nPathInfo,
+	const DWORD * pdwExcluded,
+	ptrdiff_t nExcluded,
+	TCHAR ** ppPath,
+	ptrdiff_t * px );
+
+void PathToExe( const TCHAR * pszPath, TCHAR * pszExe, rsize_t cchExe );
+
 
 typedef struct tagProcessThreadPair {
-	DWORD pid;
 	DWORD tid;
+	DWORD pid;
 } PROCESS_THREAD_PAIR;
-BOOL IsProcessBES( DWORD dwProcessId, 
-				  const PROCESS_THREAD_PAIR * pairs = NULL, ptrdiff_t numOfPairs = 0 );
+
+CLEAN_POINTER PROCESS_THREAD_PAIR * GetCachedPairs( DWORD msWait, ptrdiff_t& numOfPairs );
+CLEAN_POINTER PROCESS_THREAD_PAIR * AllocSortedPairs( ptrdiff_t& numOfPairs, ptrdiff_t prev_num );
+BOOL IsProcessBES( DWORD dwProcessID, const PROCESS_THREAD_PAIR * sorted_pairs, ptrdiff_t numOfPairs );
 
 BOOL OpenDebugLog();
 BOOL PrintFileHeader( FILE * fp );
-BOOL WriteDebugLog( LPCTSTR str );
+void WriteDebugLog( const TCHAR * str );
 BOOL CloseDebugLog();
 
 const TCHAR * GetIniPath( void );
-BOOL ReadIni( BOOL * pbAlloMulti );
 
+DWORD AdjustDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes );
 
-BOOL CheckLanguageMenuRadio( const HWND hWnd );
-VOID InitMenuEng( const HWND hWnd );
-VOID InitToolTipsEng( TCHAR str[ 4 ][ 256 ] );
+BOOL CheckLanguageMenuRadio( HWND hWnd );
+VOID InitMenuEng( HWND hWnd );
+VOID InitToolTipsEng( TCHAR (*str)[ 64 ] );
 
 #ifdef _UNICODE
-VOID InitMenuFin( const HWND hWnd );
-VOID InitToolTipsFin( WCHAR str[ 4 ][ 256 ] );
-VOID InitMenuJpn( const HWND hWnd );
-VOID InitToolTipsJpn( WCHAR str[ 4 ][ 256 ] );
-VOID InitMenuSpa( const HWND hWnd );
-VOID InitToolTipsSpa( WCHAR str[ 4 ][ 256 ] );
+VOID InitMenuFin( HWND hWnd );
+VOID InitToolTipsFin( TCHAR (*str)[ 64 ] );
+VOID InitMenuJpn( HWND hWnd );
+VOID InitToolTipsJpn( TCHAR (*str)[ 64 ] );
+VOID InitMenuSpa( HWND hWnd );
+VOID InitToolTipsSpa( TCHAR (*str)[ 64 ] );
 
-VOID InitToolTipsChiT( WCHAR str[ 4 ][ 256 ] );
-VOID InitToolTipsChiS( WCHAR str[ 4 ][ 256 ] );
-VOID InitMenuChiT( const HWND hWnd );
-VOID InitMenuChiS( const HWND hWnd );
+VOID InitToolTipsChiT( TCHAR (*str)[ 64 ] );
+VOID InitToolTipsChiS( TCHAR (*str)[ 64 ] );
+VOID InitMenuChiT( HWND hWnd );
+VOID InitMenuChiS( HWND hWnd );
 
-VOID InitToolTipsFre( WCHAR str[ 4 ][ 256 ] );
-VOID InitMenuFre( const HWND hWnd );
+VOID InitToolTipsFre( TCHAR (*str)[ 64 ] );
+VOID InitMenuFre( HWND hWnd );
 #endif
 
 BOOL WriteIni( bool fRealTime );
 
-BOOL SetSliderIni( LPCTSTR lpszTarget, const int iSlider );
-int GetSliderIni( LPCTSTR lpszTarget, HWND hWnd );
+void SetSliderIni( const TCHAR * pszString, LRESULT iSlider );
+int GetSliderIni( LPCTSTR lpszTarget, HWND hWnd, int iDef = 33 );
 VOID SetWindowPosIni( HWND hWnd );
 VOID GetWindowPosIni( POINT * ppt, RECT * prcWin );
 
@@ -444,38 +493,43 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 
 VOID AboutShortcuts( HWND hWnd );
 
-ptrdiff_t ListProcessThreads( DWORD dwOwnerPID, DWORD * pThreadIDs, ptrdiff_t numOfMaxIDs );
 DWORD * ListProcessThreads_Alloc( DWORD dwOwnerPID, ptrdiff_t& numOfThreads );
 
 BOOL SaveSnap( HWND hWnd );
 BOOL SaveSnap( LPCTSTR lpszSavePath );
-
-VOID AdjustLength( LPTSTR strPath );
-
-BOOL SliderMoved( WPARAM wParam );
 
 int ParseArgs(
 	const TCHAR * lpszCmdLine, 
 	size_t cchBuf,
 	TCHAR * lpszTargetLongPath,
 	TCHAR * lpszTargetLongExe,
-	TCHAR * lpszOptions );
+	TCHAR * lpszOptions,
+	bool fAllowMoreThan99,
+	int * aiParams = NULL );
 
+ptrdiff_t ParseJobList( const TCHAR * lpszCmdLine,
+					   TCHAR ** arTargetPaths,
+					   int * arSliders,
+					   int * arCycle,
+					   int * arDelay,
+					   ptrdiff_t array_len,
+					   bool fAllowMoreThan99 );
 
-VOID SetRealTimeMode( HWND hWnd, bool fRealTime, LPTSTR lpszWindowText, size_t cchWindowText );
+BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreThan99, TARGETINFO * ti );
+
 
 
 VOID Exit_CommandFromTaskbar( HWND hWnd );
 
-DWORD InitNotifyIconData( HWND hWnd, NOTIFYICONDATA * lpni, TARGETINFO * ti );
-
+void SendNotifyIconData( HWND hWnd, const TARGETINFO * ti, DWORD dwMessage );
+#define NI_ICONID ((UINT)1)
 
 HWND CreateTooltip ( const HINSTANCE hInst, const HWND hwndBase, LPCTSTR str );
 VOID UpdateTooltip( const HINSTANCE hInst, const HWND hwndBase, LPCTSTR str, const HWND hwndToolTip );
 
 
-BOOL Unwatch( HANDLE& hSema, HANDLE& hThread, volatile BOOL& bWatch );
 
+BOOL Unwatch( TARGETINFO * rgTargetInfo );
 
 
 #ifndef _countof
@@ -487,12 +541,7 @@ BOOL Unwatch( HANDLE& hSema, HANDLE& hThread, volatile BOOL& bWatch );
 
 
 
-BOOL SSTP_Aviutl( HWND hWnd, LPCTSTR lpTitle );
 
-//BOOL DirectSSTP( HWND hWnd, const char * hcScript );
-//BOOL DirectSSTP( HWND hWnd, const char * hcSakura, const char * hcKero );
-BOOL DirectSSTP( HWND hWnd, const char * hcSakura, const char * hcKero, const char * hcCharset );
-VOID DirectSSTP( LPCTSTR str );
 
 
 #define BTN_X1     480
@@ -520,65 +569,23 @@ int GetButtonId( POINT pt );
 	#define HIMETRIC_INCH 2540
 #endif
 
-//HFONT MyCreateFont( const HDC hDC, LPCTSTR lpszFace, int iPoint, BOOL bBold, BOOL bItalic );
-//HFONT MyCreateFont( LPCTSTR lpszFace, int iSize, BOOL bBold, BOOL bItalic );
 
 #define IGNORE_ARGV 200
 
-static inline void EnableLoggingIni( BOOL bEnabled )
-{
-	WritePrivateProfileString(
-		TEXT( "Options" ), 
-		TEXT( "Logging" ),
-		bEnabled ? TEXT( "1" ) : TEXT( "0" ),
-		GetIniPath() );
-}
 
 
 WORD SetLanguage( WORD wLID );
 WORD GetLanguage( void );
 
 
-	// Ignore cases by the file system rules:
-	// CompareString doesn't work properly for U+0186, U+0189, U+0191, U+01A9, U+0462, U+04B6,
-	// and U+216F.
-	// _tcsicmp internally calls LCMapString with LCMAP_LOWERCASE; they work better, as long as
-	// setlocale is called first.
-#define Lstrcmpi _tcsicmp
-static inline bool StrEqualNoCase( const TCHAR * s1, const TCHAR * s2 )
-{
-	return ! _tcsicmp( s1, s2 );
-}
-static inline bool StrEqual( const TCHAR * s1, const TCHAR * s2 )
-{
-	return ! _tcscmp( s1, s2 );
-}
-
+// Ignore cases by the file system rules:
+// CompareString doesn't work properly for U+0186, U+0189, U+0191, U+01A9, U+0462, U+04B6,
+// and U+216F.
+// _tcsicmp internally calls LCMapString with LCMAP_LOWERCASE; it works better, as long as
+// setlocale is called first.
+//#define Lstrcmpi _tcsicmp
 bool IsAbsFoe( LPCTSTR strPath );
 
-/*
-inline BOOL IsWindowsXPOrLater()
-{
-	static BOOL bResult = -1;
-	if( bResult == -1 )
-	{
-		OSVERSIONINFO osvi;
-		osvi.dwOSVersionInfoSize = sizeof( OSVERSIONINFO );
-		if( ! GetVersionEx( &osvi ) ) bResult = FALSE;
-		else
-		{
-			bResult = (BOOL)
-				( 
-					osvi.dwMajorVersion == 5UL && osvi.dwMinorVersion >= 1UL
-					||
-					osvi.dwMajorVersion > 5UL
-				);
-		}
-	}
-
-	return bResult;
-}
-*/
 HFONT MyCreateFont( HDC hDC, LPCTSTR lpszFace, int iPoint, BOOL bBold, BOOL bItalic );
 
 void OpenBrowser( LPCTSTR lpUrl );
@@ -586,21 +593,12 @@ void OpenBrowser( LPCTSTR lpUrl );
 
 
 
-DWORD GetShell32Version( VOID );
+
 
 // update the Status messages and enable/disable buttons/menus
 #define UpdateStatus(hWnd) SendMessage( (hWnd), WM_USER_STOP, JUST_UPDATE_STATUS, 0 )
 
 
-/*HANDLE
-CreateThread1(
-    __in_opt  LPSECURITY_ATTRIBUTES lpThreadAttributes,
-    __in      SIZE_T dwStackSize,
-    __in      unsigned (__stdcall * lpStartAddress)(void *),
-    __in_opt  LPVOID lpParameter,
-    __in      DWORD dwCreationFlags,
-    __out_opt LPDWORD lpThreadId
-    );*/
 HANDLE
 CreateThread2(
     __in      unsigned (__stdcall * lpStartAddress)(void *),
@@ -654,13 +652,22 @@ BOOL IsOptionSet( const TCHAR * pCmdLine, const TCHAR * pOption, const TCHAR * p
 #endif
 
 //*-------------------------------
-#endif // !defined(BATTLEENC_H)
 
-inline bool IsMenuChecked( HMENU hMenu, int idm )
+#define StrEqualNoCase(s1,s2) (!_tcsicmp((s1),(s2)))
+bool IsMenuChecked( HMENU hMenu, int idm );
+bool IsMenuChecked( HWND hWnd, int idm );
+CLEAN_POINTER LPVOID MemAlloc( rsize_t cb, size_t n );
+
+CLEAN_POINTER TCHAR * TcharAlloc( size_t cch );
+
+void MemFree( LPVOID lp );
+#ifdef _DEBUG
+inline void TcharFree( TCHAR * lp )
 {
-	return !!( MF_CHECKED & GetMenuState( hMenu, (UINT) idm, MF_BYCOMMAND ) );
+	(void) MemFree( lp );
 }
-inline bool IsMenuChecked( HWND hWnd, int idm )
-{
-	return !!( MF_CHECKED & GetMenuState( GetMenu( hWnd ), (UINT) idm, MF_BYCOMMAND ) );
-}
+#else
+# define TcharFree(lp) MemFree(lp)
+#endif
+
+#endif // !defined(BATTLEENC_H)

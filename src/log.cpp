@@ -1,15 +1,23 @@
+/* 
+ *	Copyright (C) 2005-2014 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "BattleEnc.h"
+#include <share.h>
 
-
-TCHAR g_lpszLogFileName[ MAX_PATH * 2 ];
+TCHAR g_lpszLogFileName[ CCHPATH ];
 
 extern BOOL g_bLogging;
 
 BOOL OpenDebugLog()
 {
-	if( ! g_bLogging ) return FALSE;
-	
-	GetModuleFileName( NULL, g_lpszLogFileName, MAX_PATH * 2UL - 64UL );
+#ifdef _DEBUG
+	OutputDebugString(_T("OpenDebugLog\n"));
+#endif
+	GetModuleFileName( NULL, g_lpszLogFileName, CCHPATH - 64 );
 	const int len = (int) _tcslen( g_lpszLogFileName );
 	for( int i = len - 1; i >= 0; i-- )
 	{
@@ -22,7 +30,7 @@ BOOL OpenDebugLog()
 
 	if( g_lpszLogFileName[ 0 ] == TEXT( '\0' ) )
 	{
-		GetCurrentDirectory( MAX_PATH * 2 - 64, g_lpszLogFileName );
+		GetCurrentDirectory( CCHPATH - 64, g_lpszLogFileName );
 	}
 
 	TCHAR tmpstr[ 64 ] = TEXT( "" );
@@ -31,10 +39,12 @@ BOOL OpenDebugLog()
 	_stprintf_s( tmpstr, _countof(tmpstr), _T( "\\bes-%04d%02d%02d.log" ), st.wYear, st.wMonth, st.wDay );
 
 
-	_tcscat_s( g_lpszLogFileName, MAX_PATH * 2, tmpstr );
+	_tcscat_s( g_lpszLogFileName, CCHPATH, tmpstr );
 
-	FILE * fdebug = NULL;	
-	_tfopen_s( &fdebug, g_lpszLogFileName, _T( "ab" ) );
+//	FILE * fdebug = NULL;	
+//	_tfopen_s( &fdebug, g_lpszLogFileName, _T( "ab" ) );
+	FILE * fdebug = _tfsopen( g_lpszLogFileName, _T("ab"), _SH_DENYWR );
+
 	if( fdebug == NULL ) return FALSE;
 
 #ifdef _UNICODE
@@ -89,11 +99,12 @@ BOOL PrintFileHeader( FILE * fp )
 	int tz_h = tz / 60;
 	int tz_m = tz - tz_h * 60;
 
-	_ftprintf( fp, _T( "  %4d-%02d-%02d %02d:%02d:%02d.%03d%s%02d:%02d PID=%08lx\r\n\r\n" ),
+	_ftprintf( fp, _T( "  %4d-%02d-%02d %02d:%02d:%02d.%03d%s%02d:%02d PID 0x%lx TID 0x%lx\r\n\r\n" ),
 		st.wYear, st.wMonth, st.wDay,
 		st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
 		tz_sign > 0 ? _T( "+" ) : _T( "-" ), tz_h, tz_m,
-		GetCurrentProcessId() );
+		GetCurrentProcessId(),
+		GetCurrentThreadId() );
 
 
 
@@ -170,18 +181,20 @@ BOOL CloseDebugLog()
 {
 	if( !g_bLogging ) return FALSE;
 
-	FILE * fdebug = NULL;	
-	_tfopen_s( &fdebug, g_lpszLogFileName, _T( "ab" ) );
-	if( fdebug == NULL )
+	//FILE * fdebug = NULL;	
+	//_tfopen_s( &fdebug, g_lpszLogFileName, _T( "ab" ) );
+	FILE * fdebug = _tfsopen( g_lpszLogFileName, _T("ab"), _SH_DENYWR );
+/*	if( fdebug == NULL )
 	{
-		Sleep( 3000UL );
+		Sleep( 3000 );
 		_tfopen_s( &fdebug, g_lpszLogFileName, _T( "ab" ) );
-	}
+	}*/
 
-	if( fdebug == NULL )
+	if( ! fdebug )
 	{
-		MessageBox( NULL, TEXT( "CloseDebugLog() failed." ),
-			APP_NAME, MB_ICONEXCLAMATION | MB_OK );
+#ifdef _DEBUG
+		OutputDebugString( TEXT( "\tCloseDebugLog() failed!\n" ) );
+#endif
 		return FALSE;
 	}
 
@@ -189,10 +202,11 @@ BOOL CloseDebugLog()
 	SYSTEMTIME st;
 	GetLocalTime( &st );
 
-	_ftprintf( fdebug, _T( "[ %04d-%02d-%02d %02d:%02d:%02d.%03d PID=%08lx] " ),
+	_ftprintf( fdebug, _T( "[ %04d-%02d-%02d %02d:%02d:%02d.%03d PID 0x%lx TID 0x%lx] " ),
 		st.wYear, st.wMonth, st.wDay,
 		st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-		GetCurrentProcessId() );
+		GetCurrentProcessId(),
+		GetCurrentThreadId() );
 
 	_fputts( _T( "-------- END --------\r\n\r\n\r\n" ), fdebug );
 	fclose( fdebug );
@@ -200,39 +214,64 @@ BOOL CloseDebugLog()
 }
 
 
-BOOL WriteDebugLog( LPCTSTR str )
+void WriteDebugLog( const TCHAR * str )
 {
-	if( ! g_bLogging || ! str ) return FALSE;
+	if( ! g_bLogging || ! str ) return;
 
-	FILE * fdebug = NULL;	
-	_tfopen_s( &fdebug, g_lpszLogFileName, _T( "ab" ) );
-	if( fdebug == NULL ) return FALSE;
-	if( *str )
+	TCHAR szBuffer[ 512 ];
+	SYSTEMTIME st;
+	GetLocalTime( &st );
+	int icch =
+		_sntprintf_s( szBuffer, _countof(szBuffer), _TRUNCATE,
+					_T("[ %04d-%02d-%02d %02d:%02d:%02d.%03d P 0x%lx T 0x%lx ] %s\r\n"),
+					(int) st.wYear,
+					(int) st.wMonth,
+					(int) st.wDay,
+					(int) st.wHour,
+					(int) st.wMinute,
+					(int) st.wSecond,
+					(int) st.wMilliseconds,
+					GetCurrentProcessId(),
+					GetCurrentThreadId(),
+					str );
+	if( icch == -1 )
 	{
-		SYSTEMTIME st;
-		GetLocalTime( &st );
-		_ftprintf( fdebug, _T( "[ %04d-%02d-%02d %02d:%02d:%02d.%03d PID=%08lx ] " ),
-			st.wYear, st.wMonth, st.wDay,
-			st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-			GetCurrentProcessId()
-		);
-		_fputts( str, fdebug );
-
-#ifdef _DEBUG
-		TCHAR s[ 100 ];
-		_stprintf_s( s, 100, _T( "[ %04d-%02d-%02d %02d:%02d:%02d.%03d PID=%08lx ] " ),
-			st.wYear, st.wMonth, st.wDay,
-			st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-			GetCurrentProcessId()
-		);
-		OutputDebugString(s);
-		OutputDebugString(str);
-		OutputDebugString(_T("\n"));
-#endif
+		icch = _countof(szBuffer) - 1;
 	}
-	_fputts( _T( "\r\n" ), fdebug );
-	fclose( fdebug );
-	return TRUE;
+#ifdef _DEBUG
+	OutputDebugString(szBuffer);
+#endif
+
+//	FILE * fdebug = NULL;	
+//	_tfopen_s( &fdebug, g_lpszLogFileName, _T( "ab" ) );
+	///FILE * fdebug = _tfsopen( g_lpszLogFileName, _T("ab"), _SH_DENYWR );
+
+	LONG lPosHigh = 0L;
+	DWORD cbToWrite = (DWORD) icch * sizeof(TCHAR);
+	DWORD dwWritten;
+	HANDLE hFile = CreateFile( g_lpszLogFileName, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+								OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL );
+	if( hFile != INVALID_HANDLE_VALUE )
+	{
+		SetFilePointer( hFile, 0L, &lPosHigh, FILE_END );
+		WriteFile( hFile, (LPCVOID) szBuffer, cbToWrite, &dwWritten, NULL );
+		CloseHandle( hFile );
+	}
+/*	if( fdebug )
+	{
+		_fputts( szBuffer, fdebug );
+		fclose( fdebug );
+	}*/
+#ifdef _DEBUG
+	else
+	{
+		OutputDebugString(_T("\t\t\t!fdebug="));
+		OutputDebugString(g_lpszLogFileName);
+		OutputDebugString(_T("\n"));
+		OutputDebugString(str);
+		OutputDebugString(_T("\n\n"));
+	}
+#endif
 }
 
 

@@ -1,7 +1,14 @@
+/* 
+ *	Copyright (C) 2005-2014 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "BattleEnc.h"
 
-extern volatile BOOL g_bHack[ 4 ];
-extern volatile DWORD g_dwTargetProcessId[ 4 ];
+extern volatile BOOL g_bHack[ MAX_SLOTS ];
+//extern volatile DWORD g_dwTargetProcessId[ MAX_SLOTS ];
 extern HFONT g_hFont;
 
 BOOL IsOptionSet( const TCHAR * pCmdLine, const TCHAR * pOption, const TCHAR * pOption2 )
@@ -53,35 +60,37 @@ HFONT UpdateFont( HFONT hFont )
 
 
 
-static int AboutBoxUrlHit( LPARAM lParam )
+int UrlHitTest( LPARAM lParam, const RECT& urlrect )
 {
-	int x = (int) LOWORD( lParam );
-	int y = (int) HIWORD( lParam );
-	return ( x > 98 && x < 294 && y > 148 && y < 166 );
+	POINT pt;
+	pt.x = (int) LOWORD( lParam );
+	pt.y = (int) HIWORD( lParam );
+	return PtInRect( &urlrect, pt ) ? 1 : 0 ;
+}
+#define AboutBoxUrlHit UrlHitTest
+
+HFONT GetFontForURL( HDC hdc, float font_size )
+{
+	double k = 96.0 / GetDeviceCaps( hdc, LOGPIXELSY );
+	int a = (int) ceil( ( k * font_size ) * GetDeviceCaps( hdc, LOGPIXELSY ) / 72.0 );
+	//return CreateFont( -MulDiv( (int) font_size, GetDeviceCaps( hdc, LOGPIXELSY ), 72 ),
+	return CreateFont( -a,
+						0, 0, 0,
+						FW_NORMAL,
+						FALSE, // bItalic
+						TRUE, // Underline
+						FALSE, ANSI_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+						DEFAULT_QUALITY,
+						FF_SWISS | VARIABLE_PITCH,
+						TEXT("Verdana") );
 }
 
-HFONT GetFontForURL( HDC hdc )
-{
-	return
-		CreateFont(
-			-MulDiv( 10, GetDeviceCaps( hdc, LOGPIXELSY ), 72 ),
-			0, 0, 0,
-			FW_NORMAL,
-			0UL, // bItalic
-			1UL, // Underline
-			0UL, ANSI_CHARSET, OUT_OUTLINE_PRECIS,
-			CLIP_DEFAULT_PRECIS,
-			ANTIALIASED_QUALITY,
-			FF_SWISS | VARIABLE_PITCH,
-			TEXT( "Verdana" )
-		);
-}
-
-#define URL_RECT { 90, 140, 320, 170 }
 #define SetFont(id,hfont) \
 	SendDlgItemMessage( hDlg, id, WM_SETFONT, (WPARAM) hfont, MAKELPARAM( FALSE, 0 ) )
+
 INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
+	static RECT urlrect = { 90, 140, 320, 170 };
 	static HCURSOR hCursor[ 3 ];
 	static int iCursor = 0;
 	static int iMouseDown = 0;
@@ -89,18 +98,11 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 	static HFONT hBoldFont = NULL;
 	static HFONT hMonoFont = NULL;
 
-	static TCHAR * lpWindowText = NULL;
+	/**static TCHAR * lpWindowText = NULL;**/
 	switch ( uMessage )
 	{
 		case WM_INITDIALOG:
 		{
-			lpWindowText = (TCHAR*) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
-												MAX_WINDOWTEXT * sizeof(TCHAR) );
-			if( ! lpWindowText )
-			{
-				EndDialog( hDlg, 0 );
-				break;
-			}
 			HDC hDC = GetDC( hDlg );
 			
 			hBoldFont = MyCreateFont( hDC, TEXT( "Georgia" ), 14, TRUE, TRUE );
@@ -140,8 +142,8 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 
 			TCHAR str[ 1024 ] = _T("");
 			_stprintf_s( str, _countof(str), _T( "Compiled on: %hs, %hs" ), __TIME__, __DATE__ );
-			SetDlgItemText( hDlg, IDC_DATETIME , str );
-			SetDlgItemText( hDlg, IDC_COPYRIGHT , APP_COPYRIGHT );
+			SetDlgItemText( hDlg, IDC_DATETIME, str );
+			SetDlgItemText( hDlg, IDC_COPYRIGHT, APP_COPYRIGHT );
 
 			SendDlgItemMessage( hDlg, IDC_EDITBOX_GPL, EM_SETMARGINS,
 				(WPARAM) ( EC_LEFTMARGIN | EC_RIGHTMARGIN ),
@@ -168,12 +170,15 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 #endif
 
 #ifdef _UNICODE
-			swprintf_s( str, _countof(str), L"Unicode Build %ls%ls", COMPILER_, CPU_ );
+			_stprintf_s( str, _countof(str), L"Unicode Build %s%s",
 #else
-			sprintf_s( str, _countof(str), "ANSI (Non-Unicode) Build %s%s", COMPILER_, CPU_ );
+			_stprintf_s( str, _countof(str), "ANSI (Non-Unicode) Build %s%s",
 #endif
+						COMPILER_, CPU_ );
+
 			SetDlgItemText( hDlg, IDC_DESCRIPTION2 , str );
 			
+			TCHAR lpWindowText[ MAX_WINDOWTEXT ] = _T("");
 #ifdef _UNICODE
 			if( IS_JAPANESE )
 			{
@@ -247,7 +252,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 				_tcscpy_s( lpWindowText, MAX_WINDOWTEXT, _T( "About BES" ) );
 				SetWindowText( hDlg, lpWindowText );
 			}
-
+#if 0
 			char hcSstpVersion[ 1024 ] = "";
 
 #ifdef _UNICODE
@@ -281,12 +286,20 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			{
 				DirectSSTP( (HWND) lParam, "About 'Battle Encoder Shirase'...", hcSstpVersion, "ASCII" );
 			}
+#endif
+
+
+			RECT rcRef, rcRef2;
+			GetClientRect( GetDlgItem( hDlg, IDC_DESCRIPTION ), &rcRef );
+			MapWindowRect( GetDlgItem( hDlg, IDC_DESCRIPTION ), hDlg, &rcRef );
+			GetClientRect( GetDlgItem( hDlg, IDC_DESCRIPTION2 ), &rcRef2 );
+			MapWindowRect( GetDlgItem( hDlg, IDC_DESCRIPTION2 ), hDlg, &rcRef2 );
+			SetRect( &urlrect, rcRef2.left + 2, rcRef.bottom + 2, rcRef.right, rcRef2.top );
 
 			hCursor[ 0 ] = LoadCursor( ( HINSTANCE ) NULL, IDC_ARROW );
 			hCursor[ 1 ] = LoadCursor( ( HINSTANCE ) NULL, IDC_HAND );
 			hCursor[ 2 ] = hCursor[ 1 ];
 			SetCursor( hCursor[ 0 ] );
-
 			PostMessage( hDlg, WM_USER_CAPTION, 0, 0 );
 			break;
 		}
@@ -300,7 +313,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			}
 			break;
 		}
-
+/**
 		case WM_GETICON:
 		case WM_USER_CAPTION:
 		{
@@ -310,7 +323,6 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 				GetWindowText( hDlg, strCurrentText, MAX_WINDOWTEXT );
 				if( _tcscmp( strCurrentText, lpWindowText ) != 0 )
 					SendMessage( hDlg, WM_SETTEXT, 0, (LPARAM) lpWindowText );
-
 			}
 			
 			if( uMessage == WM_USER_CAPTION )
@@ -319,7 +331,6 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			return FALSE;
 			break;
 		}
-
 		case WM_NCUAHDRAWCAPTION:
 		{
 			if( lpWindowText )
@@ -332,13 +343,14 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			return FALSE;
 			break;
 		}
+**/
 		
 		case WM_MOUSEMOVE:
 		{
 			if( iMouseDown == -1 ) break;
 
 			int iPrevCursor = iCursor;
-			iCursor = AboutBoxUrlHit( lParam );
+			iCursor = AboutBoxUrlHit( lParam, urlrect );
 
 			// Reset Cursor for each WM_MOUSEMOVE, silly but...
 			SetCursor( hCursor[ iCursor ] );
@@ -353,7 +365,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 				// something is wrong here and that doesn't work.
 				SetCursor( hCursor[ iCursor ] );
 */
-				const RECT urlrect = URL_RECT;
+//				const RECT urlrect = URL_RECT;
 				InvalidateRect( hDlg, &urlrect, TRUE );
 			}
 			break;
@@ -367,12 +379,12 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 
 			SetCapture( hDlg );
 
-			if( AboutBoxUrlHit( lParam ) )
+			if( AboutBoxUrlHit( lParam, urlrect ) )
 			{
 				iMouseDown = 1;
 				SetCursor( hCursor[ 1 ] );
 				iCursor = 2;
-				const RECT urlrect = URL_RECT;
+//				const RECT urlrect = URL_RECT;
 				InvalidateRect( hDlg, &urlrect, TRUE );
 			}
 			else
@@ -386,7 +398,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 		{
 			ReleaseCapture();
 			
-			if( iMouseDown == 1 && AboutBoxUrlHit( lParam ) )
+			if( iMouseDown == 1 && AboutBoxUrlHit( lParam, urlrect ) )
 			{
 				OpenBrowser( APP_HOME_URL );
 			}
@@ -397,7 +409,6 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			break;
 		}
 
-
 		case WM_ACTIVATE:
 		{
 			if( wParam == WA_INACTIVE )
@@ -405,7 +416,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 				iMouseDown = -1;
 				iCursor = 0;
 				SetCursor( hCursor[ 0 ] );
-				const RECT urlrect = URL_RECT;
+//				const RECT urlrect = URL_RECT;
 				InvalidateRect( hDlg, &urlrect, TRUE );
 			}
 			else
@@ -421,7 +432,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			HDC hdc = BeginPaint( hDlg, &ps );
 			const int iSaved = SaveDC( hdc );
 			
-			HFONT hfontURL = GetFontForURL( hdc );
+			HFONT hfontURL = GetFontForURL( hdc, 9.0 );
 			HFONT hOldFont = SelectFont( hdc, hfontURL );
 
 			SetBkMode( hdc, TRANSPARENT );
@@ -429,7 +440,16 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 				iCursor == 2 ? RGB( 0xff, 0x00, 0x00 ) :
 				iCursor == 1 ? RGB( 0x00, 0x80, 0x00 ) : RGB( 0x00, 0x00, 0xff ) );
 			
-			TextOut( hdc, 100, 148, APP_HOME_URL, (int) _tcslen( APP_HOME_URL ) );
+			//"http://mion.faireal.net/BES/"
+			// 1234567890123456789012345678
+//			TextOut( hdc, 100, 148, APP_HOME_URL, 28 );
+			SetTextAlign( hdc, TA_TOP | TA_LEFT );
+			TextOut( hdc, urlrect.left, urlrect.top, APP_HOME_URL, 28 );
+			SIZE size;
+			GetTextExtentPoint32( hdc, APP_HOME_URL, 28, &size );
+			urlrect.right = urlrect.left + size.cx;
+			urlrect.bottom = urlrect.top + size.cy;
+
 			SelectObject( hdc, hOldFont );
 			DeleteFont( hfontURL );
 			
@@ -448,7 +468,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 				SetTextColor( hDC, RGB( 0,0,0xa0 ) );
 				return (INT_PTR)(HBRUSH) GetSysColorBrush( COLOR_3DFACE );
 			}
-			else return (INT_PTR)(HBRUSH) NULL;
+			return (INT_PTR)(HBRUSH) NULL;
 			break;
 		}
 		
@@ -473,11 +493,11 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 				hMonoFont = NULL;
 			}
 
-			if( lpWindowText )
+			/**if( lpWindowText )
 			{
 				HeapFree( GetProcessHeap(), 0L, lpWindowText );
 				lpWindowText = NULL;
-			}
+			}**/
 			break;
 		}
 		
@@ -488,14 +508,98 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 	return TRUE;
 }
 
+static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiParams );
 
+ptrdiff_t ParseJobList( const TCHAR * lpszCmdLine,
+					   TCHAR ** arTargetPaths,
+					   int * arSliders,
+					   int * arCycle,
+					   int * arDelay,
+					   ptrdiff_t array_len,
+					   bool fAllowMoreThan99 )
+{
+	if( ! lpszCmdLine || ! arTargetPaths || ! arSliders || ! array_len ) return 0;
+
+	const TCHAR * ptr = lpszCmdLine;
+	while( *ptr == _T(' ') ) ++ptr;
+	if( *ptr == _T('\"') ) // quoted app-name
+	{
+		ptr = _tcschr( ptr + 1, _T( '\"' ) ); // unquote
+		if( ! ptr ) return 0;
+		++ptr; // char after the closing quot. mark
+		if( *ptr != _T(' ') ) return 0;
+	}
+	else // app-name not quoted
+	{
+		ptr = _tcschr( ptr, _T(' ') ); // space after app-name
+		if( ! ptr ) return 0;
+	}
+
+	ptrdiff_t num = 0;
+	while( num < array_len )
+	{
+		const TCHAR * pQuote = _tcschr( ptr, _T('\"') );
+		if( ! pQuote ) break;
+		const TCHAR * pUnquote = _tcschr( pQuote + 1, _T('\"') );
+		if( ! pUnquote ) break;
+	
+		size_t cchPath = (size_t)( pUnquote - ( pQuote + 1 ) );
+		arTargetPaths[ num ] = TcharAlloc( cchPath + 1 );
+
+		if( arTargetPaths[ num ] == NULL ) // not allocated
+		{
+			for( ptrdiff_t n = num - 1; n >= 0; --n ) // free everything (v1.7.5)
+			{
+				MemFree( arTargetPaths[ n ] );
+				arTargetPaths[ n ] = NULL;
+			}
+
+			num = 0;
+			break;
+		}
+
+		_tcsncpy_s( arTargetPaths[ num ], cchPath + 1, pQuote + 1, cchPath );
+		arTargetPaths[ num ][ cchPath ] = _T('\0'); // just in case
+
+		// Find the number (if any)
+		ptr = pUnquote + 1;
+		while( *ptr != _T('\0')
+				&& *ptr != _T('\"')
+				&& !( _T('0') <= *ptr && *ptr <= _T('9') ) // not a number
+				&& !( *ptr == _T('-') && _T('0') <= ptr[ 1 ] && ptr[ 1 ] <= _T('9') ) // not a negative number
+		){ ++ptr; }
+
+		if( *ptr == _T('\0') ) // no number
+		{
+			arSliders[ num++ ] = -1; // def value, meaning 'undefined'
+			break;
+		}
+		else if( *ptr == _T('\"') ) // no number
+		{
+			arSliders[ num++ ] = -1; // def value, meaning 'undefined'
+			--ptr; // rewind so this quote will be the next pQuote
+		}
+		else
+		{
+			int aiParams[ 2 ] = { 0, 0 };
+			arSliders[ num ] = get_slider_int( ptr, fAllowMoreThan99, &aiParams[ 0 ] );
+			arCycle[ num ] = aiParams[ 0 ];
+			arDelay[ num ] = aiParams[ 1 ];
+			++num;
+		}
+	}
+
+	return num;
+}
 
 int ParseArgs(
 	const TCHAR * lpszCmdLine, 
 	size_t cchBuf,
 	TCHAR * lpszTargetLongPath,
 	TCHAR * lpszTargetLongExe,
-	TCHAR * lpszOptions )
+	TCHAR * lpszOptions,
+	bool fAllowMoreThan99,
+	int * aiParams )
 {
 	if( ! lpszCmdLine )
 		return IGNORE_ARGV;
@@ -583,24 +687,47 @@ int ParseArgs(
 		WriteDebugLog( _T("Target=") );
 		WriteDebugLog( strTargetPath );
 
+		// Refuse it if it's only one letter [20140331]
+		if( ! strTargetPath[ 1 ] ) return IGNORE_ARGV;
+
 		if( lpszTargetLongPath )
 		{
-			const DWORD cchLongPath = GetLongPathName( strTargetPath, lpszTargetLongPath, (DWORD) cchBuf );
-			if( ! cchLongPath || cchBuf <= cchLongPath )
+			TCHAR * star = _tcschr( strTargetPath, _T('*') );
+			if( star )
 			{
-				if( cchBuf <= cchTargetPath )
-					return IGNORE_ARGV;
+				bool fOK = false;
+				if( strTargetPath < star )
+				{
+					TCHAR szHead[ CCHPATH ];
+					_tcsncpy_s( szHead, _countof(szHead), strTargetPath, (rsize_t)( star - strTargetPath ) );
+					TCHAR * pBkSlash = _tcsrchr( szHead, _T('\\') );
+					if( pBkSlash )
+					{
+						*pBkSlash = _T('\0');
+						DWORD dwcch = GetLongPathName( szHead, lpszTargetLongPath, (DWORD) cchBuf );
+						if( dwcch && dwcch < cchBuf )
+						{
+							ptrdiff_t ofs = pBkSlash - szHead; // offset to the BackSlash above
+							_tcscat_s( lpszTargetLongPath, cchBuf, strTargetPath + ofs );
+							fOK = true;
+						}
+					}
+				}
 
-				_tcscpy_s( lpszTargetLongPath, cchBuf, strTargetPath );
+				if( ! fOK )
+					_tcscpy_s( lpszTargetLongPath, cchBuf, strTargetPath );
+			}
+			else
+			{
+				DWORD dwcch = GetLongPathName( strTargetPath, lpszTargetLongPath, (DWORD) cchBuf );
+				if( ! dwcch || cchBuf <= dwcch )
+					_tcscpy_s( lpszTargetLongPath, cchBuf, strTargetPath );
 			}
 
 			if( lpszTargetLongExe )
 			{
-				PathToExe( lpszTargetLongPath, lpszTargetLongExe, (int) cchBuf );
-
-#if !defined( _UNICODE )
-				strcpy_s( lpszTargetLongPath, cchBuf, lpszTargetLongExe );
-#endif
+				PathToExe( lpszTargetLongPath, lpszTargetLongExe, cchBuf );
+				// strcpy_s( lpszTargetLongPath, cchBuf, lpszTargetLongExe ); // ANSIFIX
 			}
 		}
 	}
@@ -608,7 +735,7 @@ int ParseArgs(
 	while( *ptr == _T(' ') ) ++ptr; // skip spaces before Options
 
 	if( ! *ptr ) // no optitons
-		return 0;
+		return -1;
 
 	WriteDebugLog( _T("Options=") );
 	WriteDebugLog( ptr );
@@ -631,22 +758,61 @@ int ParseArgs(
 		++ptr;
 	}
 
-	int iSlider = 0;
+	int iSlider = -1;
 	if( *ptr ) // a number found after a space
-	{
-		// "bes taraget.exe 25" and "bes target.exe -25" mean the same thing (v1.6.0)
+		iSlider = get_slider_int( ptr, fAllowMoreThan99, aiParams );
+
+	return iSlider;
+}
+
+static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiParams )
+{
+	int iSlider = -1;
+/*
 #if defined(_MSC_VER) && _MSC_VER < 1400
-		const double percent = fabs( _tcstod( ptr, NULL ) ); // VC6 doesn't have _wtof
+	double percent = _tcstod( ptr, NULL ); // VC6 doesn't have _wtof
 #else
-		const double percent = fabs( _tstof( ptr ) );
+	double percent = _tstof( ptr );
 #endif
-		if( 0.0 < percent && percent < 99.0 )
+*/
+	TCHAR * endptr;
+	double percent = _tcstod( ptr, &endptr );
+
+	if( aiParams != NULL ) // aiParams[0]: unit (Sleep/Awake cycle), aiParams[1]: delay (initial delay before starting cycles) 2016-11-01
+	{
+		aiParams[ 0 ] = -1; // undefined/invalid
+		aiParams[ 1 ] = -1;
+		if( *endptr == _T(';') )
 		{
-			iSlider = __max( 1, (int)( percent + 0.5 ) );
+			if( _T('0') <= endptr[ 1 ] && endptr[ 1 ] <= _T('9') )
+			{
+				double d = _tcstod( endptr + 1, &endptr );
+				if( UNIT_MIN <= d && d <= UNIT_MAX || d == 0.0 ) aiParams[ 0 ] = (int) d;
+				if( *endptr == _T(';') && _T('0') <= endptr[ 1 ] && endptr[ 1 ] <= _T('9') ) {
+					d = _tcstod( endptr + 1, &endptr );
+					if( DELAY_MIN <= d && d <= DELAY_MAX ) aiParams[ 1 ] = (int) d;
+				}
+			}
+			else if( endptr[ 1 ] == _T(';') && _T('0') <= endptr[ 2 ] && endptr[ 2 ] <= _T('9') )
+			{
+				double d = _tcstod( endptr + 2, &endptr );
+				if( DELAY_MIN <= d && d <= DELAY_MAX ) aiParams[ 1 ] = (int) d;
+			}
 		}
-		else if( 99.0 <= percent && percent < 100.0 )
+	}
+
+	// "bes taraget.exe 25" and "bes target.exe -25" mean the same thing (v1.6.0)
+	if( percent < 0.0 ) percent = -percent;
+
+	if( 0.0 < percent && percent < 99.0 )
+	{
+		iSlider = (int)( percent + 0.5 );
+		if( iSlider < SLIDER_MIN ) iSlider = SLIDER_MIN;
+	}
+	else if( 99.0 <= percent && percent < 100.0 )
+	{
+		if( fAllowMoreThan99 )
 		{
-			iSlider = 99;
 			int decimal = 0;
 			if( *ptr == _T('-') ) ++ptr;
 			while( *ptr == _T('0') ) ++ptr;
@@ -658,43 +824,44 @@ int ParseArgs(
 			)
 			{
 				decimal = ptr[ 3 ] - _T('0');
-				if( _T('5') <= ptr[ 4 ] && ptr[ 4 ] <= _T('9') )
-					++decimal;
+				if( _T('5') <= ptr[ 4 ] && ptr[ 4 ] <= _T('9') ) ++decimal;
 			}
 			else
 			{
 				decimal = (int)(( percent - 99.0 ) * 10.0 + 0.5 );
 			}
-			iSlider = 99  + __min( decimal, 9 );
-		}
-#if ALLOW100
-		else if( percent == 100.0 )
-		{
-			iSlider = SLIDER_MAX;
-		}
-#endif
-	}
 
-	if( iSlider < SLIDER_MIN || iSlider > SLIDER_MAX )
-	{
-		iSlider = 0;
+			iSlider = 99 + decimal;
+			if( iSlider > SLIDER_MAX ) iSlider = SLIDER_MAX;
+		}
+		else iSlider = 99;
 	}
+#if ALLOW100
+	else if( percent == 100.0 )
+	{
+		iSlider = (fAllowMoreThan99) ? SLIDER_MAX : 99 ;
+	}
+#endif
 
 	return iSlider;
 }
 
 void ShowCommandLineHelp( HWND hWnd )
 {
-	UINT uType = (UINT)( hWnd ? MB_ICONINFORMATION | MB_TOPMOST
+	UINT uType = (UINT)( hWnd
+						? MB_ICONINFORMATION | MB_OK
 						: MB_ICONINFORMATION | MB_TOPMOST | MB_OK );
 	MessageBox( hWnd,
-				_T("\"C:\\path\\to\\BES.exe\" \"C:\\path\\to\\target.exe\" [N] [--allow-multi] [--minimize] etc.\r\n")
+				TEXT( "* Commandline Help *\r\n" )
+				TEXT( "\r\n" )
+				_T("\"C:\\path\\to\\BES.exe\" \"C:\\path\\to\\target.exe\" [N] [OPTIONS]\r\n")
 #ifdef _UNICODE
 				_T("\r\n\t= Limit <target.exe>; reduce its CPU time by N% (N=1\x2013") _T("99).\r\n")
 #else
 				_T("\r\n\t= Limit <target.exe>; reduce its CPU time by N% (N=1...99).\r\n")
 #endif
 				_T("\r\n")
+				_T("[OPTIONS]\r\n")
 #ifdef _UNICODE
 				_T("--minimize, -m\r\n\t= Don\x2019t show BES\x2019s window.\r\n")
 #else
@@ -702,36 +869,29 @@ void ShowCommandLineHelp( HWND hWnd )
 #endif
 				_T("--unlimit, -u\r\n\t= Stop limiting.\r\n")
 				_T("--toggle, -t\r\n\t= Limit if not limited; unlimit otherwise.\r\n")
-				_T("--exitnow, -e\r\n\t= Exit now.\r\n")
+				_T("--exitnow, -e, -x\r\n\t= Exit now.\r\n")
 				_T("--allow-multi\r\n\t= Allow multiple instances of BES.\r\n")
-				_T("--disallow-multi\r\n\t= Disallow multiple instances of BES.\r\n")
-				_T("--watch-multi\r\n\t= Watch multiple instances of the target EXE.\r\n")
+			//	_T("--disallow-multi\r\n\t= Disallow multiple instances of BES.\r\n")
+			//	_T("--watch-multi\r\n\t= Watch multiple instances of the target EXE.\r\n")
+				_T("--add, -a\r\n\t= Add a target to the watch list,\r\n\t or (if already in the list) update its parameters.\r\n") // 2014-03-31 (1.7.0.18)
+				//_T("--hide\r\n\t= Hide the window of BES and its tray icon (use this carefully).\r\n") // 2015-10-22 (1.7.0.26)
+				//_T("--reshow\r\n\t= Reshow the hidden window and tray icon.\r\n") // 2015-10-22 (1.7.0.26)
+				//_T("--selfish\r\n\t= Always assume there are no other instances of BES (use this carefully).\r\n") // 2015-11-26 (1.7.0.27)
+				_T("--delay, -D\r\n\t= Wait for 1 second before starting BES.\r\n") // 2015-11-26 (1.7.0.27)
 				_T("--help, -h, /?\r\n\t= Show this help.\r\n")
+				_T("--version\r\n\t= Show the version.\r\n")
+				_T("\r\n")
+				_T("BES.exe -J \"target1.exe\" N1 \"target2.exe\" N2, etc.\r\n\t= Multiple targets in one command line.\r\n") // 2015-11-26 (1.7.0.27)
+				_T("\r\n")
+				_T("You can use N;C;D instead of N:\r\n e.g. BES.exe \"target.exe\" 30;40;1000\r\n") // 2016-11-02 (1.7.3.2)
+				_T("\t= Sleep/Awake Cycle: 40 ms, Initial Delay: 1000 ms\r\n") // 2016-11-02 (1.7.3.2)
+				_T("\r\n")
+				_T("You can use \"PID:xxxx\" instead of \"path\\to\\target.exe\"\r\n") // 2017-03-17 (1.7.5)
 				,
 				APP_NAME, uType );
 }
 
-static inline bool IsActive( void )
-{
-	return ( g_bHack[ 0 ]
-			|| g_bHack[ 1 ]
-			|| g_bHack[ 2 ] && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE );
-}
 
-VOID Exit_CommandFromTaskbar( HWND hWnd )
-{
-	ShowWindow( hWnd, SW_HIDE );
-	
-	NOTIFYICONDATA ni;
-	DWORD dwSize = (DWORD) ( GetShell32Version() >= 5 ? sizeof( NOTIFYICONDATA ) : NOTIFYICONDATA_V1_SIZE );
-	ZeroMemory( &ni, dwSize );
-	ni.cbSize = sizeof( dwSize );
-	ni.hWnd = hWnd;
-	ni.uID = 0;
-	Shell_NotifyIcon( NIM_DELETE, &ni );
-
-	SendMessage( hWnd, WM_COMMAND, (WPARAM)( IsActive() ? IDM_EXIT_ANYWAY : IDM_EXIT ), 0 );
-}
 
 
 VOID AboutShortcuts( HWND hWnd )
@@ -741,22 +901,31 @@ VOID AboutShortcuts( HWND hWnd )
 		TEXT( "\r\n" )
 		TEXT( "[Enter]\t\t: Select Target\r\n" )
 		TEXT( "[T]\t\t: Select Target\r\n" )
-		TEXT( "[Ins]\t\t: Select Target\r\n\r\n" )
-		TEXT( "[W]\t\t: Watch\r\n\r\n" )
-		TEXT( "[C]\t\t: Control Limiter(s)\r\n\r\n" )
+		TEXT( "[Ins]\t\t: Select Target\r\n" )
+		TEXT( "[W]\t\t: Watch\r\n" )
+		TEXT( "\r\n" )
+		TEXT( "[C]\t\t: Control Limiter(s)\r\n" )
+		TEXT( "\r\n" )
 		TEXT( "[Esc]\t\t: Unlimit All (when active)\r\n" )
 		TEXT( "[U]\t\t: Unlimit All (when active)\r\n" )
-		TEXT( "[Delete]\t\t: Unlimit All (when active)\r\n\r\n" )
+		TEXT( "[Delete]\t\t: Unlimit All (when active)\r\n" )
+		TEXT( "\r\n" )
 		TEXT( "[Esc]\t\t: Exit (when idle)\r\n" )
 		TEXT( "[X]\t\t: Exit (when idle)\r\n" )
+		TEXT( "\r\n" )
+		TEXT( "[L]\t\t: Show the Watch List\r\n" )
+		TEXT( "\r\n" )
 		TEXT( "[A]\t\t: About\r\n" )
-		TEXT( "[F1]\t\t: This Help (you can disable this shortcut)\r\n\r\n" )
+		TEXT( "[F1]\t\t: This Help (you can disable this shortcut)\r\n" )
+		TEXT( "[F2]\t\t: Commandline Help\r\n" )
+		TEXT( "\r\n" )
 #ifdef _UNICODE
-		TEXT( "[F5]\t\t: Refresh the List (in the \x201CTarget\x201D dialog box)\r\n\r\n" )
+		TEXT( "[F5]\t\t: Refresh the List (in the \x201CTarget\x201D dialog box)\r\n" )
 #else
-		TEXT( "[F5]\t\t: Refresh the List (in the \"Target\" dialog box)\r\n\r\n" )
+		TEXT( "[F5]\t\t: Refresh the List (in the \"Target\" dialog box)\r\n" )
 #endif
-		TEXT( "[B]\t\t: Boss key aka Minimize (Send to System Tray)\r\n\r\n" )
+		TEXT( "\r\n" )
+		TEXT( "[B]\t\t: Boss key aka Minimize (Send to System Tray)\r\n" )
 		;
 
 	MessageBox(
@@ -765,6 +934,72 @@ VOID AboutShortcuts( HWND hWnd )
 		APP_NAME,
 		MB_OK | MB_ICONINFORMATION
 	);
+}
+
+void ShowWatchList( HWND hWnd ) // 2017-11-03
+{
+	extern PATHINFO g_arPathInfo[ MAX_WATCH ];
+	extern ptrdiff_t g_nPathInfo;
+	extern HANDLE hReconSema;
+	extern volatile UINT g_uUnit;
+
+	const TCHAR * pszTitle = _T("BES Watch List");
+
+	if( WaitForSingleObject( hReconSema, 3000 ) != WAIT_OBJECT_0 ) {
+		MessageBox( hWnd, _T("Busy!"), _T("Sema Error"), MB_ICONEXCLAMATION | MB_OK );
+		return;
+	}
+
+	const ptrdiff_t nItems = g_nPathInfo;
+	if( nItems <= 0 ) {
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+		MessageBox( hWnd, _T("No items."), pszTitle, MB_ICONINFORMATION | MB_OK );
+		return;
+	}
+
+	TCHAR ** lppTmp = (TCHAR **) MemAlloc( sizeof(TCHAR*), (size_t) nItems );
+	if( ! lppTmp ) {
+		ReleaseSemaphore( hReconSema, 1L, NULL );
+		return;
+	}
+
+	const UINT uDefCycle = g_uUnit;
+	int icchWritten = 0;
+	ptrdiff_t i;
+	for( i = 0; i < nItems; ++i )
+	{
+		const size_t cch = _tcslen( g_arPathInfo[ i ].pszPath ) + 256;
+		lppTmp[ i ] = TcharAlloc( cch );
+		if( ! lppTmp[ i ] ) break;
+
+		const UINT uCycle = g_arPathInfo[ i ].wCycle;
+		icchWritten += _sntprintf_s( lppTmp[ i ], cch, _TRUNCATE,
+									_T("[%d] %s\n\t-%d%% : Cycle=%u ms, Initial Delay=%u ms\n\n"),
+									(int) i + 1,
+									g_arPathInfo[ i ].pszPath,
+									g_arPathInfo[ i ].slider,
+									uCycle ? uCycle : uDefCycle,
+									(UINT) g_arPathInfo[ i ].wDelay );
+	}
+	ReleaseSemaphore( hReconSema, 1L, NULL );
+
+	if( i == nItems )
+	{
+		const size_t cchMessage = (size_t) icchWritten + 1;
+		TCHAR * lpMessage = TcharAlloc( cchMessage );
+		if( lpMessage )
+		{
+			lpMessage[ 0 ] = _T('\0');
+			for( ptrdiff_t j = 0; j < nItems; ++j ) _tcscat_s( lpMessage, cchMessage, lppTmp[ j ] );
+
+			MessageBox( hWnd, lpMessage, pszTitle, MB_ICONINFORMATION | MB_OK );
+
+			TcharFree( lpMessage );
+		}
+	}
+
+	for( i = nItems - 1; i >= 0; --i ) if( lppTmp[ i ] ) TcharFree( lppTmp[ i ] );
+	MemFree( lppTmp );
 }
 
 typedef struct tagGSHOW_PARAMS {
@@ -785,7 +1020,7 @@ BOOL CALLBACK EnumWindowsProc(
 	
 	if( hwndTarget != lpParams->hWnd )
 	{
-		if( Lstrcmpi( (const TCHAR*) lpText, lpParams->lpTarget ) == 0 )
+		if( _tcsicmp( lpText, lpParams->lpTarget ) == 0 )
 		{
 			if( IsIconic( hwndTarget ) )
 			{
@@ -1226,6 +1461,145 @@ errno_t strncpy_s(
 	return ret;
 }
 
+//
+// strncat_s, wcsncat_s
+//
+errno_t strncat_s(
+   char *strDest,
+   size_t numberOfElements,
+   const char *strSource,
+   size_t count
+)
+{
+	if( ! strDest || ! strSource || numberOfElements == 0 )
+	{
+		if( strDest ) *strDest = '\0';
+		errno = EINVAL;
+		return EINVAL;
+	}
+	
+	errno_t ret = (errno_t) 0;
+	
+	size_t cchUsed = 0;
+	
+	while( cchUsed < numberOfElements && strDest[ cchUsed ] )
+	{
+		++cchUsed;
+	}
+
+	if( cchUsed == numberOfElements )
+	{
+		*strDest = '\0';
+		errno = EINVAL;
+		return EINVAL;
+	}
+
+	const size_t cchFree = numberOfElements - cchUsed;
+
+	// cchMaxCat doesn't include the NUL.
+	const size_t cchMaxCat = ( count == _TRUNCATE )? cchFree - 1 : count;
+
+	size_t cchSource = 0;
+
+	// cchSource doesn't include the NUL.
+	while( cchSource <= cchMaxCat && strSource[ cchSource ] )
+	{
+		++cchSource;
+	}
+
+	// D doesn't include the NUL.
+	const size_t D = __min( cchSource, cchMaxCat );
+	
+	if( cchFree < D + 1 )
+	{
+		*strDest = '\0';
+
+		errno = ERANGE;
+		ret = ERANGE;
+	}
+	else
+	{
+		memcpy( strDest + cchUsed, strSource, sizeof( strDest[ 0 ] ) * D );
+		strDest[ cchUsed + D ] = '\0';
+
+		if( cchFree < cchSource + 1 && count == _TRUNCATE )
+		{
+			ret = STRUNCATE;
+		}
+	}
+		
+	return ret;
+}
+
+errno_t wcsncat_s(
+   wchar_t *strDest,
+   size_t numberOfElements,
+   const wchar_t *strSource,
+   size_t count
+)
+{
+	if( ! strDest || ! strSource || numberOfElements == 0 )
+	{
+		if( strDest ) *strDest = L'\0';
+		
+		errno = EINVAL;
+		return EINVAL;
+	}
+	
+	errno_t ret = (errno_t) 0;
+	
+	size_t cchUsed = 0;
+	
+	while( cchUsed < numberOfElements && strDest[ cchUsed ] )
+	{
+		++cchUsed;
+	}
+
+	if( cchUsed == numberOfElements )
+	{
+		*strDest = L'\0';
+		errno = EINVAL;
+		return EINVAL;
+	}
+
+	const size_t cchFree = numberOfElements - cchUsed;
+
+	// cchMaxCat doesn't include the NUL.
+	const size_t cchMaxCat = ( count == _TRUNCATE )? cchFree - 1 : count;
+
+	size_t cchSource = 0;
+
+	// cchSource doesn't include the NUL.
+	while( cchSource <= cchMaxCat && strSource[ cchSource ] )
+	{
+		++cchSource;
+	}
+
+	// D doesn't include the NUL.
+	const size_t D = __min( cchSource, cchMaxCat );
+	
+	if( cchFree < D + 1 )
+	{
+		*strDest = L'\0';
+
+		errno = ERANGE;
+		ret = ERANGE;
+	}
+	else
+	{
+		memcpy( strDest + cchUsed, strSource, sizeof( strDest[ 0 ] ) * D );
+		strDest[ cchUsed + D ] = L'\0';
+
+		if( cchFree < cchSource + 1 && count == _TRUNCATE )
+		{
+			ret = STRUNCATE;
+		}
+	}
+		
+	return ret;
+}
+
+
 int _snprintf_s(
    char *buffer,
    size_t sizeOfBuffer,
@@ -1438,3 +1812,23 @@ void OpenBrowser( LPCTSTR lpUrl )
 		);
 }
 
+bool IsMenuChecked( HMENU hMenu, int idm )
+{
+	return !!( MF_CHECKED & GetMenuState( hMenu, (UINT) idm, MF_BYCOMMAND ) );
+}
+bool IsMenuChecked( HWND hWnd, int idm )
+{
+	return !!( MF_CHECKED & GetMenuState( GetMenu( hWnd ), (UINT) idm, MF_BYCOMMAND ) );
+}
+CLEAN_POINTER LPVOID MemAlloc( rsize_t cb, size_t n )
+{
+	return HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, cb * n );
+}
+CLEAN_POINTER TCHAR * TcharAlloc( size_t cch )
+{
+	return static_cast<TCHAR *>( HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, cch * sizeof(TCHAR) ) );
+}
+void MemFree( LPVOID lp )
+{
+	HeapFree( GetProcessHeap(), 0, lp );
+}

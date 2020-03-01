@@ -1,3 +1,11 @@
+/* 
+ *	Copyright (C) 2005-2014 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
+#if 0
 #include "BattleEnc.h"
 #define MAX_SSTP 1024 * 5
 
@@ -206,7 +214,7 @@ static HWND GetSakuraHwnd( LPCTSTR lpszAgentName )
 */
 }
 
-#ifdef UKAGAKA
+
 BOOL SSTP_Aviutl( HWND hWnd, LPCTSTR lpTitle )
 {
 #define SSTP_AVIUTL_BUF_SIZE 1024

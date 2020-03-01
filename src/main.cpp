@@ -1,19 +1,30 @@
+/* 
+ *	Copyright (C) 2005-2014 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "BattleEnc.h"
 
+extern HANDLE hReconSema;
 bool g_fRealTime = false;
-HANDLE g_hMutexDLL = NULL; // used in list.cpp
+bool g_fHide = false;
+bool g_fLowerPriv = false;
 HINSTANCE g_hInst = NULL;
 HWND g_hWnd = NULL;
 HWND g_hListDlg = NULL;
 HWND g_hSettingsDlg = NULL;
-
-BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes );
-BOOL SetDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes );
-
-void ShowCommandLineHelp( HWND hWnd );
-
+BOOL g_bLogging = FALSE;
 static HHOOK hKeyboardHook = NULL;
 static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lParam );
+
+unsigned __stdcall ReconThread( void * pv );
+BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes );
+
+void ReadIni( BOOL& bAllowMulti, BOOL& bLogging );
+void ShowCommandLineHelp( HWND hWnd );
+CLEAN_POINTER DWORD * PathToProcessIDs( const PATHINFO& pathInfo, ptrdiff_t& numOfPIDs );
 
 static DWORD _bes_init( int& nCmdShow );
 static void _bes_uninit( void );
@@ -29,6 +40,9 @@ void invalid_parameter_handler( const wchar_t * expr, const wchar_t * func, cons
 
 int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow )
 {
+#ifdef _DEBUG
+	OutputDebugString(_T("WinMain\n"));
+#endif
 	UNREFERENCED_PARAMETER( hPrevInstance );
 	UNREFERENCED_PARAMETER( lpCmdLine );
 	_prevent_dll_preloading();
@@ -49,10 +63,40 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 		return 0;
 	}
 
+	HANDLE hEvent_Exiting
+		= CreateEvent(
+			NULL,  // default security descriptor
+			TRUE,  // manual-reset: once signaled, remains signaled until manually reset
+			FALSE, // initially non-signaled
+			NULL   // created without a name
+		);
+	if( ! hEvent_Exiting )
+	{
+		_bes_uninit();
+		return 0;
+	}
+
+	hReconSema = CreateSemaphore( NULL, 1L, 1L, NULL );
+	if( ! hReconSema )
+	{
+		CloseHandle( hEvent_Exiting );
+		_bes_uninit();
+		return 0;
+	}
+
+	OleInitialize( NULL ); //*
+
 	HWND hWnd = _create_window( hInstance, dwStyle );
 
 	if( ! hWnd )
 	{
+		if( hReconSema )
+		{
+			CloseHandle( hReconSema );
+			hReconSema = NULL;
+		}
+		OleUninitialize(); //*
+		CloseHandle( hEvent_Exiting );
 		_bes_uninit();
 		return 0;
 	}
@@ -74,8 +118,10 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 	UpdateWindow( hWnd );
 
 	HANDLE hToken = NULL;
-	DWORD dwPrevAttributes = 0ul;
+	DWORD dwPrevAttributes = 0;
 	BOOL bPriv = EnableDebugPrivilege( &hToken, &dwPrevAttributes );
+
+	HANDLE hReconThread = CreateThread2( &ReconThread, hEvent_Exiting );
 
 	MSG msg;
 	while ( GetMessage( &msg, NULL, 0U, 0U ) )
@@ -88,20 +134,36 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 			}
 		}
 	
-		if ( ! TranslateAccelerator( msg.hwnd, hAccelTable, &msg ) ) 
+		/*if( g_hListDlg && IsDialogMessage( g_hListDlg, &msg ) )
+		{
+			;
+		}
+		else */if( ! TranslateAccelerator( msg.hwnd, hAccelTable, &msg ) ) 
 		{
 			TranslateMessage( &msg );
 			DispatchMessage( &msg );
 		}
 	}
+	SetEvent( hEvent_Exiting );
 
 	if( hToken )
 	{
 		if( bPriv ) 
-			SetDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
+			AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
 
 		CloseHandle( hToken );
 	}
+
+	WaitForSingleObject( hReconThread, 3000 );
+	CloseHandle( hReconThread );
+	if( hReconSema )
+	{
+		CloseHandle( hReconSema );
+		hReconSema = NULL;
+	}
+
+	OleUninitialize(); //*
+	CloseHandle( hEvent_Exiting );
 
 	_bes_uninit();
 
@@ -257,17 +319,150 @@ static void UnloadFunctionPtrs( void )
 	}
 }
 
+#include <Sddl.h>
+void tokendebug( HANDLE hProcess )
+{
+	(void)hProcess;
+#if 0
+	HANDLE htkProcess = NULL;
 
+	TCHAR tmpstr[ 256 ] = _T("");
+	SetLastError(0);
+	if( OpenProcessToken( GetCurrentProcess(), TOKEN_QUERY, &htkProcess ) )
+	{
+		OutputDebugString(_T("#OpenProcessToken ok\n"));
+		DWORD dwLen = 0;
+		GetTokenInformation( htkProcess, TokenPrivileges, NULL, 0, &dwLen );
+		TOKEN_PRIVILEGES * lpTokenPri = (TOKEN_PRIVILEGES*) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, dwLen );
+		if( lpTokenPri )
+		{
+			DWORD dwActLen;
+			GetTokenInformation( htkProcess, TokenPrivileges, lpTokenPri, dwLen, &dwActLen );
+			for( DWORD i = 0; i < lpTokenPri->PrivilegeCount; ++i )
+			{
+				TCHAR name[128];
+				DWORD cch = 128;
+				LookupPrivilegeName( NULL, &(lpTokenPri->Privileges[ i ].Luid), name, &cch );
+				_stprintf_s( tmpstr, _countof(tmpstr), _T("INFO: %s is %lu"), name, lpTokenPri->Privileges[ i ].Attributes );
+				WriteDebugLog( tmpstr );
+			}
+
+			MemFree( lpTokenPri );
+		}
+		CloseHandle( htkProcess );
+		htkProcess = NULL;
+	}
+	else
+	{
+		_stprintf_s( tmpstr, _countof(tmpstr), _T("#OpenProcessToken failed, Error Code %lu"), GetLastError() );
+		WriteDebugLog( tmpstr );
+	}
+
+	if( hProcess == NULL )
+		return;
+
+	htkProcess = NULL;
+	if( OpenProcessToken( hProcess, TOKEN_QUERY, &htkProcess ) )
+	{
+		OutputDebugString(_T("#OpenProcessToken ok\n"));
+		DWORD dwLen = 0;
+		GetTokenInformation( htkProcess, TokenPrivileges, NULL, 0, &dwLen );
+		SID_AND_ATTRIBUTES * lpSaa = (SID_AND_ATTRIBUTES*) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, dwLen );
+		if( lpSaa )
+		{
+			DWORD dwActLen;
+			TCHAR str[ 1024 ];
+			SetLastError( 0 );
+			BOOL b = GetTokenInformation( htkProcess, TokenUser, lpSaa, dwLen, &dwActLen );
+			_stprintf_s( str, 1024, _T("GetTokenInformation: b=%d e=%lu"), b, GetLastError() );
+			WriteDebugLog( str );
+
+			LPTSTR StringSid = NULL;
+			ConvertSidToStringSid( lpSaa->Sid, &StringSid );
+			WriteDebugLog( _T("StringSid:") );
+			WriteDebugLog( StringSid );
+			if( StringSid )
+			{
+				LocalFree( StringSid );
+				StringSid = NULL;
+			}
+
+			SID_NAME_USE name_use;
+			TCHAR Name[ 256 ] = _T("");
+			DWORD cchName = 256;
+			TCHAR RefDomName[ 256 ] = _T("");
+			DWORD cchRefDomName = 256;
+			LookupAccountSid( NULL, lpSaa->Sid, Name, &cchName, RefDomName, &cchRefDomName, &name_use );
+
+			WriteDebugLog( _T("Name:") );
+			WriteDebugLog( Name );
+			WriteDebugLog( _T("RefDomName:") );
+			WriteDebugLog( RefDomName );
+		
+			MemFree( lpSaa );
+		}
+
+		CloseHandle( htkProcess );
+		htkProcess = NULL;
+	}
+#endif
+}
 static DWORD _bes_init( int& nCmdShow )
 {
-	OleInitialize( NULL ); //*
+	LoadFunctionPtrs();
 
 	BOOL bAllowMulti = FALSE;
-	ReadIni( &bAllowMulti ); // Load conf. incl. logging-setting (so do this before OpenDebugLog)
-	OpenDebugLog();
+	ReadIni( bAllowMulti, g_bLogging );
+	if( g_bLogging )
+	{
+		OpenDebugLog();
+		tokendebug( NULL );
+	}
 
-	TCHAR strOptions[ 256 ];
-	const int iSlider = ParseArgs( GetCommandLine(), _countof(strOptions), NULL, NULL, strOptions );
+	TCHAR strOptions[ CCHPATH ] = _T("");
+	TCHAR szTargetPath[ CCHPATH ] = _T("");
+	const int iSlider = ParseArgs( GetCommandLine(), CCHPATH, szTargetPath, NULL, strOptions, false );
+
+	ptrdiff_t numOfPIDs = 0;
+
+	if( iSlider != IGNORE_ARGV && 2 <= _tcslen( szTargetPath ) )
+	{
+		PATHINFO pathInfo;
+		ZeroMemory( &pathInfo, sizeof(PATHINFO) );
+		pathInfo.pszPath = szTargetPath;
+		const TCHAR * pStar = _tcschr( szTargetPath, _T('*') );
+		if( pStar )
+		{
+			pathInfo.cchHead = (size_t)( pStar - szTargetPath );
+			pathInfo.cchTail = _tcslen( pStar + 1 );
+		}
+		pathInfo.cchPath = _tcslen( szTargetPath );
+
+		ptrdiff_t numOfPairs = 0;
+		ptrdiff_t px = 0;
+		DWORD * lpPIDs = PathToProcessIDs( pathInfo, numOfPIDs );
+		if( numOfPIDs )
+		{
+			// Don't use the cached ver.  The cleaner is not running yet.
+			PROCESS_THREAD_PAIR * sorted_pairs = AllocSortedPairs( numOfPairs, 0 );
+			if( sorted_pairs )
+			{
+				for( ; px < numOfPIDs; ++px )
+				{
+					if( IsProcessBES( lpPIDs[ px ], sorted_pairs, numOfPairs ) ) break;
+				}
+				MemFree( sorted_pairs );
+			}
+		}
+
+		if( lpPIDs ) MemFree( lpPIDs );
+
+		if( px < numOfPIDs )
+		{
+			MessageBox( NULL, _T("BES Can't Target BES"), APP_NAME, MB_OK | MB_ICONEXCLAMATION | MB_TOPMOST );
+			return 0;
+		}
+	}
 
 	if( IsOptionSet( strOptions, _T("--help"), _T("-h") )
 		|| IsOptionSet( strOptions, _T("/?"), NULL ) )
@@ -288,29 +483,55 @@ static DWORD _bes_init( int& nCmdShow )
 		return 0;
 	}
 
+	if( IsOptionSet( strOptions, _T("--version"), NULL ) )
+	{
+		MessageBox( NULL, APP_LONGNAME, APP_NAME, MB_OK | MB_ICONINFORMATION | MB_TOPMOST );
+		return 0;
+	}
+
 	const BOOL bEmptyCmd = ( iSlider == IGNORE_ARGV );
-	const BOOL bExitNow = ! bEmptyCmd && IsOptionSet( strOptions, _T("--exitnow"), _T("-e") );
+	const BOOL bExitNow = ! bEmptyCmd
+							&& ( IsOptionSet( strOptions, _T("--exitnow"), _T("-e") ) || IsOptionSet( strOptions, _T("-x"), NULL ) );
 	const BOOL bMinimize = ! bEmptyCmd && ! bExitNow && IsOptionSet( strOptions, _T("--minimize"), _T("-m") );
 	const BOOL bUnlimit = ! bEmptyCmd && ! bExitNow && IsOptionSet( strOptions, _T("--unlimit"), _T("-u") );
+
 	if( IsOptionSet( strOptions, _T("--allow-multi"), NULL ) )
 		bAllowMulti = TRUE;
-	if( IsOptionSet( strOptions, _T("--disallow-multi"), NULL ) )
+
+	if( IsOptionSet( strOptions, _T("--disallow-multi"), NULL )
+		|| IsOptionSet( strOptions, _T("--add"), _T("-a") )
+		|| IsOptionSet( strOptions, _T("--job-list"), _T("-J") )
+	)
+	{
 		bAllowMulti = FALSE;
-
-
-
+	}
 
 	if( bMinimize )
 	{
 		nCmdShow = SW_SHOWMINNOACTIVE;
 	}
 
+	BOOL bReshow = FALSE;
+	if( IsOptionSet( strOptions, _T("--hide"), NULL ) )
+	{
+		g_fHide = true;
+		nCmdShow = SW_HIDE;
+	}
+	else bReshow = IsOptionSet( strOptions, _T("--reshow"), NULL );
+	
+	if( IsOptionSet( strOptions, _T("--delay"), _T("-D") ) )
+	{
+		Sleep( 1000 );
+	}
+
 	DWORD_PTR Handled = FALSE;
 	HWND hwndToShow = NULL;
-	BES_COPYDATA mydata;
+	BES_COPYDATA mydata = {0};
 
 	// deny multiple instances?
 	//if( ! bAllowMulti || bExitNow )
+	
+	if( ! IsOptionSet( strOptions, _T("--selfish"), NULL ) )
 	{
 		HWND hwndFound = NULL;
 		memset( &mydata, 0, sizeof(mydata) );
@@ -323,7 +544,7 @@ static DWORD _bes_init( int& nCmdShow )
 		mydata.uFlags |= BESCDF_ANSI;
 #endif
 
-#ifdef _DEBUG
+#if 1//def _DEBUG
 		mydata.dwParam = GetCurrentProcessId();
 #endif
 		COPYDATASTRUCT cd;
@@ -355,7 +576,12 @@ static DWORD _bes_init( int& nCmdShow )
 
 			hwndList[ idxFound ] = hwndFound;
 			
-			if( bMinimize && ! bExitNow )
+			if( bReshow && hwndFound )
+			{
+				ShowWindow( hwndFound, SW_SHOWDEFAULT );
+			}
+			
+			if( bMinimize && ! bExitNow && ! g_fHide )
 			{
 				if( IsWindowVisible( hwndFound ) )
 				{
@@ -403,7 +629,7 @@ static DWORD _bes_init( int& nCmdShow )
 	if( bExitNow || bUnlimit && ( mydata.uFlags & BESCDF_SENT )
 		|| Handled || hwndToShow && ! bAllowMulti )
 	{
-		if( hwndToShow && ! bMinimize && ! bExitNow && ! bAllowMulti )
+		if( hwndToShow && ! bMinimize && ! bExitNow && ! bAllowMulti && ! g_fHide )
 		{
 			// Workaround to make AutoHotkey happy (another BES is now tray-ed)
 			ShowWindow( hwndToShow, SW_HIDE );
@@ -419,15 +645,11 @@ static DWORD _bes_init( int& nCmdShow )
 		return 0UL;
 	}
 
-	//g_hMutexDLL = CreateMutex( NULL, FALSE, NULL );
-	LoadFunctionPtrs();
-
 	INITCOMMONCONTROLSEX iccex; 
 	iccex.dwICC = ICC_WIN95_CLASSES;
 	iccex.dwSize = sizeof( INITCOMMONCONTROLSEX );
 	InitCommonControlsEx( &iccex );
 
-	g_fRealTime = !! GetPrivateProfileInt( TEXT("Options"), TEXT("RealTime"), FALSE, GetIniPath() );
 
 	SetPriorityClass( GetCurrentProcess(), 
 						(DWORD)( g_fRealTime ? REALTIME_PRIORITY_CLASS : HIGH_PRIORITY_CLASS ) );
@@ -439,7 +661,7 @@ static DWORD _bes_init( int& nCmdShow )
 
 	DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
 
-	if( ! bMinimize )
+	if( ! bMinimize && ! g_fHide )
 		dwStyle |= WS_VISIBLE;
 	
 	return dwStyle;
@@ -453,21 +675,12 @@ static void _bes_uninit( void )
 		hKeyboardHook = NULL;
 	}
 
-	if( g_hWnd )
-	{
-		WriteIni( g_fRealTime );
-		g_hWnd = NULL;
-	}
+	WriteIni( g_fRealTime ); // this frees pointers like g_lpszEnemy
 
-	/*if( g_hMutexDLL )
-	{
-		CloseHandle( g_hMutexDLL );
-		g_hMutexDLL = NULL;
-	}*/
-	UnloadFunctionPtrs();
-		
-	OleUninitialize();
 	CloseDebugLog();
+
+	g_hWnd = NULL;
+	UnloadFunctionPtrs();
 }
 
 static HWND _create_window( HINSTANCE hInstance, DWORD dwStyle )
@@ -518,7 +731,7 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 #define IsMenuMode(lp) ((lp) & 0x10000000L)
 	else if( FIRST_PRESSED( lParam ) && ! IsMenuMode( lParam ) )
 	{
-		if( wParam == 'B' ) // boss-key
+		if( wParam == _T('B') || wParam == _T('M') ) // boss-key
 		{
 			HWND hwndFocus = GetFocus();
 			if( hwndFocus && hwndFocus != g_hWnd )
@@ -527,6 +740,7 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 			if( hwndFocus
 				&& ( hwndFocus == g_hWnd || hwndFocus == g_hListDlg || hwndFocus == g_hSettingsDlg ) )
 			{
+				/*
 				// SendMessage may time out if the dialogbox is there but is about to be destroyed.
 				if( g_hListDlg )
 					SendMessageTimeout( g_hListDlg, WM_COMMAND, IDCANCEL, 0,
@@ -536,7 +750,8 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 					SendMessageTimeout( g_hSettingsDlg, WM_COMMAND, IDCANCEL, 0,
 										SMTO_NORMAL | SMTO_ABORTIFHUNG, 500, NULL );
 			
-				ShowWindow( g_hWnd, SW_HIDE );
+				ShowWindow( g_hWnd, SW_SHOWMINIMIZED );*/
+				SendMessage( g_hWnd, WM_COMMAND, IDM_MINIMIZE, 0 );
 				return 1;
 			}
 		}
@@ -551,19 +766,31 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 		if( hFocus && hFocus != g_hListDlg )
 			hFocus = GetParent( hFocus );
 
-		if( hFocus != g_hListDlg 
-			||
-			KEY_DOWN( VK_CONTROL ) && wParam != _T('R')
-		)
+		if( hFocus != g_hListDlg )
 		{
 			return CallNextHookEx( hKeyboardHook, nCode, wParam, lParam );
 		}
 
 		if( wParam == VK_F5 || wParam == _T('R') )
 		{
-			if( SendMessageTimeout( g_hListDlg, WM_COMMAND, MAKEWPARAM( IDC_RELOAD, BN_CLICKED ), 
-								(LPARAM) GetDlgItem( g_hListDlg, IDC_RELOAD ),
-								SMTO_NORMAL | SMTO_ABORTIFHUNG, 3000, NULL ) ) return 1;
+			SendMessageTimeout( g_hListDlg, WM_COMMAND, MAKEWPARAM( IDC_RELOAD, BN_CLICKED ), 
+									(LPARAM) GetDlgItem( g_hListDlg, IDC_RELOAD ),
+									SMTO_NORMAL | SMTO_ABORTIFHUNG, 3000, NULL );
+			return 1;
+		}
+
+		if( KEY_DOWN(VK_CONTROL) )
+		{
+			if( _T('1') <= wParam && wParam <= _T('7') )
+			{
+#define URF_SORT_ALGO      0x0004
+				SendMessageTimeout( g_hListDlg, WM_USER_REFRESH,
+										(WPARAM) -1,
+										MAKELPARAM( URF_SORT_ALGO, wParam - _T('1') ),
+										SMTO_NORMAL | SMTO_ABORTIFHUNG, 3000, NULL );
+				return 1;
+			}
+			return CallNextHookEx( hKeyboardHook, nCode, wParam, lParam );
 		}
 
 		int wId = -1;
@@ -576,11 +803,11 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 		else if( wParam == _T('I') ) wId = IDC_SLIDER_BUTTON;
 		else if( wParam == _T('K') ) wId = IDC_SHOW_MANUALLY;
 		else if( wParam == _T('L') ) wId = IDOK;
-		else if( wParam == _T('M') ) wId = IDC_UNLIMIT_ALL;
+		else if( wParam == _T('N') ) wId = IDC_RESET_IFF;
 		else if( wParam == _T('O') ) wId = IDC_FOE;
-		//else if( wParam == _T('R') ) wId = IDC_RELOAD;
+		else if( wParam == _T('R') ) wId = IDC_RELOAD;
 		else if( wParam == _T('S') ) wId = IDC_SHOW;
-		else if( wParam == _T('U') ) wId = IDC_RESET_IFF;
+		else if( wParam == _T('U') ) wId = IDC_UNLIMIT_ALL;
 		else if( wParam == _T('W') ) wId = IDC_WATCH;
 		else if( wParam == _T('Z') ) wId = IDC_UNFREEZE;
 		else if( wParam >= _T('A') && wParam <= _T('Z') ) wId = -1;

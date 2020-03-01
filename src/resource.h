@@ -119,6 +119,8 @@
 #define IDM_WATCH_RT__                  30041
 #define IDM_WATCH_RT___                 30042
 #define IDM_DISABLE_F1                  30043
+#define IDM_LOWER_PRIVILEGE             30044
+#define IDM_SHOWWATCHLIST               30045
 #define IDM_GSHOW                       35000
 #define IDC_COPYRIGHT                   42500
 #define IDC_STATIC                      -1
@@ -129,8 +131,8 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        120
-#define _APS_NEXT_COMMAND_VALUE         30044
-#define _APS_NEXT_CONTROL_VALUE         1049
+#define _APS_NEXT_COMMAND_VALUE         30046
+#define _APS_NEXT_CONTROL_VALUE         1050
 #define _APS_NEXT_SYMED_VALUE           120
 #endif
 #endif

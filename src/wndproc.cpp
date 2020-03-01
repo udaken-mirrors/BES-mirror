@@ -1,69 +1,149 @@
+/* 
+ *	Copyright (C) 2005-2017 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "BattleEnc.h"
 
-extern bool g_fRealTime;
+volatile BOOL g_bHack[ MAX_SLOTS ];
+//volatile DWORD g_dwTargetProcessId[ MAX_SLOTS ];
+HANDLE hSemaphore[ MAX_SLOTS ];
+volatile int g_Slider[ MAX_SLOTS ];
+
+TCHAR * ppszStatus[ 18 ];
+HANDLE hChildThread[ MAX_SLOTS ];
+HFONT g_hFont = NULL;
+
 extern HINSTANCE g_hInst;
 extern HWND g_hWnd;
 extern HWND g_hSettingsDlg;
 extern HWND g_hListDlg;
+extern BOOL g_bLogging;
+extern bool g_fRealTime;
+extern bool g_fHide;
+extern bool g_fLowerPriv;
+extern PATHINFO g_arPathInfo[ MAX_WATCH ];
+extern ptrdiff_t g_nPathInfo;
+extern HANDLE hReconSema;
 
-BOOL g_bLogging = FALSE;
-volatile int g_Slider[ 4 ];
 
-HANDLE hSemaphore[ 4 ];
-volatile BOOL g_bHack[ 4 ];
-
-volatile DWORD g_dwTargetProcessId[ 4 ];
-TCHAR g_szTarget[ 3 ][ CCHPATHEX ]; //##
-HANDLE hChildThread[ 4 ] = { NULL, NULL, NULL, NULL };
-
-HFONT g_hFont = NULL;
-
-HBITMAP LoadSkin( HWND hWnd, HDC& hMemDC, SIZE& PicSize );
+HBITMAP LoadSkin( HWND hWnd, HDC hMemDC, SIZE& PicSize );
 BOOL ChangeSkin( HWND hWnd, HDC hMemDC, SIZE& PicSize, HBITMAP& hOrigBmp );
-BOOL DrawSkin( HDC hdc, HDC hMemDC, SIZE& SkinSize );
-HFONT GetFontForURL( HDC hdc );
-static inline HFONT _create_font( LPCTSTR lpszFace, int iSize, BOOL bBold, BOOL bItalic );
-static bool _toggle_opt_menu_item( HWND hWnd, UINT uMenuId, const TCHAR * pIniOptionName );
-
-static bool IsActive( void )
-{
-	return ( g_bHack[ 0 ]
-			|| g_bHack[ 1 ]
-			|| g_bHack[ 2 ] && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE );
-}
-
+BOOL DrawSkin( HDC hdc, HDC hMemDC, const SIZE& SkinSize );
+HFONT GetFontForURL( HDC hdc, float font_size );
 void ShowCommandLineHelp( HWND hWnd );
-static int MainWindowUrlHit( LPARAM lParam );
-//static void CopyTarget( const HACK_PARAMS& hp, HACK_PARAMS& hp2 );
-//static void ClearTarget( HACK_PARAMS& hp );
+void ShowWatchList( HWND hWnd );
+void NotifyIcon_OnContextMenu( HWND hWnd );
+BOOL HasFreeSlot( void );
+void DeleteNotifyIcon( HWND hWnd );
+
+CLEAN_POINTER DWORD * PathToProcessIDs( const PATHINFO& pathInfo, ptrdiff_t& numOfPIDs );
+bool PathEqual( const PATHINFO& pathInfo, const TCHAR * lpPath, size_t cch, bool fSafe );
+
+BOOL LimitPID( HWND hWnd, TARGETINFO * pTarget, const DWORD pid, int iSlider, BOOL bUnlimit, const int * aiParams ); // v1.7.5
+DWORD ParsePID( const TCHAR * strTarget ); // v1.7.5
+static HFONT _create_font( LPCTSTR lpszFace, int iSize, BOOL bBold, BOOL bItalic );
+
+static void CheckMenuItemB( HMENU hMenu, UINT uMenuId, bool fCheck );
+static bool CheckMenuItemI( HMENU hMenu, UINT uMenuId, const TCHAR * strKey, const TCHAR * strIniPath );
+
+static bool toggle_opt_menu_item( HWND hWnd, UINT uMenuId, const TCHAR * pIniOptionName, int nIfEnabled );
+static void SetRealTimeMode( HWND hWnd, bool fRealTime );
+static void EnableLoggingIni( BOOL bEnabled );
+int UrlHitTest( LPARAM lParam, const RECT& urlrect );
+#define MainWindowUrlHit UrlHitTest
+
+
+
 
 
 LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
-	const static RECT urlrect = { 420L, 390L, 620L, 420L };
+	static RECT urlrect = { 420L, 390L, 620L, 420L };
 	static HCURSOR hCursor[ 3 ];
 	static int iCursor = 0;
 	static int iMouseDown = 0;
-	static HACK_PARAMS hp[ 3 ];//##
-	static TARGETINFO ti[ 3 ];//##
+	//static HACK_PARAMS hp[ MAX_SLOTS ];
+	static TARGETINFO ti[ MAX_SLOTS ];
 	static HFONT hFontItalic;
 	static HWND hButton[ 4 ];
 	static HWND hToolTip[ 4 ];
-	static TCHAR lpszStatus[ 16 ][ cchStatus ];
-	static TCHAR strToolTips[ 4 ][ 256 ];
-	static TCHAR lpszWindowText[ MAX_WINDOWTEXT ] = { _T('\0') };
+	static TCHAR s_szStatus[ 18 ][ cchStatus ];
+	static TCHAR s_szLimitingStatus[ 256 ];
+	static TCHAR strToolTips[ 4 ][ 64 ];
 
 	static HDC hMemDC = NULL;
 	static HBITMAP hOrigBmp = NULL;
-	static SIZE SkinSize = { 640L, 480L };
+	static SIZE SkinSize = { 0L, 0L };
 
-	static UINT uMsgTaskbarCreated;
+	static UINT uMsgTaskbarCreated = 0;
 	
 	switch ( uMessage ) 
 	{
 		case WM_CREATE:
 		{
 			g_hWnd = hWnd;
+
+
+#if 0 //(2014+04+12)
+typedef DWORD (WINAPI *GetProcessImageFileName_t)(HANDLE,LPTSTR,DWORD);
+typedef DWORD (WINAPI *GetLogicalDriveStrings_t)(DWORD,LPTSTR);
+typedef DWORD (WINAPI *QueryDosDevice_t)(LPCTSTR,LPTSTR,DWORD);
+typedef BOOL (WINAPI *GetTokenInformation_t)(HANDLE,TOKEN_INFORMATION_CLASS,LPVOID,DWORD,PDWORD);
+typedef BOOL (WINAPI *LookupPrivilegeValue_t)(LPCTSTR,LPCTSTR,PLUID);
+typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
+																	 DWORD,PTOKEN_PRIVILEGES,PDWORD);
+typedef BOOL (WINAPI *OpenThreadToken_t)(HANDLE,DWORD,BOOL,PHANDLE);
+typedef BOOL (WINAPI *ImpersonateSelf_t)(SECURITY_IMPERSONATION_LEVEL);
+typedef BOOL (WINAPI *GetProcessTimes_t)(HANDLE,LPFILETIME,LPFILETIME,LPFILETIME,LPFILETIME);
+
+extern     GetProcessImageFileName_t
+g_pfnGetProcessImageFileName    ;
+extern     GetLogicalDriveStrings_t
+g_pfnGetLogicalDriveStrings     ;
+extern     QueryDosDevice_t
+g_pfnQueryDosDevice             ;
+extern     GetTokenInformation_t
+g_pfnGetTokenInformation        ;
+extern     LookupPrivilegeValue_t
+g_pfnLookupPrivilegeValue       ;
+extern     AdjustTokenPrivileges_t
+g_pfnAdjustTokenPrivileges      ;
+extern     OpenThreadToken_t
+g_pfnOpenThreadToken            ;
+extern     ImpersonateSelf_t
+g_pfnImpersonateSelf            ;
+extern     GetProcessTimes_t
+g_pfnGetProcessTimes            ;
+
+TCHAR s[100];
+_stprintf_s(s,100,_T("<g_pfnGetProcessImageFileName> %p"),g_pfnGetProcessImageFileName);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnGetLogicalDriveStrings> %p"),g_pfnGetLogicalDriveStrings);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnQueryDosDevice> %p"),g_pfnQueryDosDevice);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnGetProcessTimes> %p"),g_pfnGetProcessTimes);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnGetTokenInformation> %p"),g_pfnGetTokenInformation);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnLookupPrivilegeValue> %p"),g_pfnLookupPrivilegeValue);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnAdjustTokenPrivileges> %p"),g_pfnAdjustTokenPrivileges);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnOpenThreadToken> %p"),g_pfnOpenThreadToken);
+WriteDebugLog(s);
+_stprintf_s(s,100,_T("<g_pfnImpersonateSelf> %p"),g_pfnImpersonateSelf);
+WriteDebugLog(s);
+
+#endif
+
+
+
+
+			TCHAR lpszWindowText[ MAX_WINDOWTEXT ] = _T("");
 			if( g_fRealTime )
 			{
 				_stprintf_s( lpszWindowText, _countof(lpszWindowText), _T("%s - Idle (Real-time mode)"), APP_LONGNAME );
@@ -76,13 +156,8 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			}
 			SetWindowText( hWnd, lpszWindowText );
 
-			hOrigBmp = LoadSkin( hWnd, hMemDC, SkinSize );
-
 			HMENU hMenu = GetMenu( hWnd );
-			CheckMenuItem( hMenu, IDM_REALTIME,
-							(UINT) MF_BYCOMMAND | ( g_fRealTime ? MF_CHECKED : MF_UNCHECKED ) );
-
-			DeleteMenu( hMenu, IDM_DEBUGPRIVILEGE, MF_BYCOMMAND );
+			CheckMenuItemB( hMenu, IDM_REALTIME, g_fRealTime );
 
 #ifdef _UNICODE
 			if( IS_JAPANESE )
@@ -127,45 +202,20 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			
 			// "Language" sub-submenu
 			EnableMenuItem( hOptMenu, 4U, MF_BYPOSITION | MF_GRAYED );
-
-			/*EnableMenuItem( hMenu, 
-				IDM_DEBUGPRIVILEGE, 
-				MF_BYCOMMAND | MF_GRAYED | MF_DISABLED );*/
-
 #endif
 			CheckLanguageMenuRadio( hWnd );
-			CheckMenuItem( hMenu, IDM_LOGGING,
-							(UINT) MF_BYCOMMAND | ( g_bLogging? MFS_CHECKED : MFS_UNCHECKED ) );
+
+			CheckMenuItemB( hMenu, IDM_LOGGING, !! g_bLogging );
 
 			const TCHAR * strIniPath = GetIniPath();
-#if 0//def _UNICODE
-			const bool fDebugPriv = !! GetPrivateProfileInt( TEXT( "Options" ), 
-				TEXT( "DebugPrivilege" ), 0, strIniPath );
-			CheckMenuItem( hMenu, IDM_DEBUGPRIVILEGE, 
-				(UINT)( fDebugPriv ? ( MF_BYCOMMAND | MFS_CHECKED )
-				: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
-#endif
-			const bool fAllowMoreThan99 = !! GetPrivateProfileInt( TEXT( "Options" ), 
-												TEXT( "AllowMoreThan99" ), 0, strIniPath );
-			CheckMenuItem( hMenu, IDM_ALLOWMORETHAN99, 
-				(UINT)( fAllowMoreThan99 ? ( MF_BYCOMMAND | MFS_CHECKED )
-				: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
-			
-			const bool fAllowMulti = !! GetPrivateProfileInt( TEXT( "Options" ), 
-					TEXT( "AllowMulti" ), FALSE, strIniPath );
-			CheckMenuItem( hMenu, IDM_ALLOWMULTI, 
-					(UINT)( fAllowMulti ? ( MF_BYCOMMAND | MFS_CHECKED )
-					: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
-			const bool fListAll = !! GetPrivateProfileInt( TEXT( "Options" ), 
-					TEXT( "ListAll" ), FALSE, strIniPath );
-			CheckMenuItem( hMenu, IDM_ALWAYS_LISTALL, 
-					(UINT)( fListAll ? ( MF_BYCOMMAND | MFS_CHECKED )
-					: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
-			const bool fDisableF1 = !! GetPrivateProfileInt( TEXT( "Options" ), 
-					TEXT( "DisableF1" ), FALSE, strIniPath );
-			CheckMenuItem( hMenu, IDM_DISABLE_F1, 
-					(UINT)( fDisableF1 ? ( MF_BYCOMMAND | MFS_CHECKED )
-					: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
+			bool fAllowMoreThan99 = CheckMenuItemI( hMenu, IDM_ALLOWMORETHAN99, _T("AllowMoreThan99"), strIniPath );
+
+			bool fListAll = ( GetPrivateProfileInt( TEXT( "Options" ), TEXT( "ListAll" ), 0, strIniPath ) == 2 );
+			CheckMenuItemB( hMenu, IDM_ALWAYS_LISTALL, fListAll );
+
+			CheckMenuItemI( hMenu, IDM_DISABLE_F1, _T("DisableF1"), strIniPath );
+			CheckMenuItemB( hMenu, IDM_LOWER_PRIVILEGE, g_fLowerPriv );
+
 
 			const UINT wrt = GetPrivateProfileInt( _T("Options"), _T("WatchRT"), 80, strIniPath );
 			CheckMenuRadioItem( GetMenu( hWnd ), IDM_WATCH_RT8, IDM_WATCH_RT2,
@@ -177,13 +227,32 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			g_hFont = _create_font( TEXT( "Tahoma" ), 17, TRUE, FALSE );
 
 			HDC hDC = GetDC( hWnd );
-			hFontItalic = MyCreateFont( hDC, TEXT( "Georgia" ), 13, FALSE, TRUE );
+			double k = 96.0 / GetDeviceCaps( hDC, LOGPIXELSY ); // 20140412
+			hFontItalic = MyCreateFont( hDC, TEXT( "Georgia" ), (int)( 13 * k + 0.5 ), FALSE, TRUE );
+			hMemDC = CreateCompatibleDC( hDC );
+
+			HFONT hFontURL = GetFontForURL( hDC, 10.0 );
+			HFONT hOldFont = SelectFont( hDC, hFontURL );
+			SIZE size;
+			GetTextExtentPoint32( hDC, APP_HOME_URL, 28, &size );
+			SelectFont( hDC, hOldFont );
+			DeleteFont( hFontURL );
 			ReleaseDC( hWnd, hDC );
-			
+
+			RECT rc;
+			GetClientRect( hWnd, &rc );
+			urlrect.left = rc.right - 20 - size.cx;
+			urlrect.top = rc.bottom - 20 - size.cy;
+			urlrect.right = rc.right - 20;
+			urlrect.bottom = rc.bottom - 20;
+
+			if( hMemDC )
+				hOrigBmp = LoadSkin( hWnd, hMemDC, SkinSize );
+			else
+				EnableMenuItem( hMenu, IDM_SKIN, MF_BYCOMMAND | MF_GRAYED );
+
 			hButton[ 0 ] = CreateWindow( TEXT( "BUTTON" ), TEXT( "&Target..." ), 
-				WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON //***1.4.0
-				//| BS_NOTIFY
-				,
+				WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
 				480,30,130,75,
 				hWnd, (HMENU)IDM_LIST, g_hInst, NULL );
 			hButton[ 1 ] = CreateWindow( TEXT( "BUTTON" ), TEXT( "&Unlimit all" ), 
@@ -205,154 +274,87 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			EnableMenuItem( hMenu, IDM_STOP, MF_BYCOMMAND | MF_GRAYED );
 			EnableMenuItem( hMenu, IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED );
 			
-			ptrdiff_t i  = 0;
-			for( ; i < 3; ++i )//##
+			ZeroMemory( ti, sizeof(TARGETINFO) * MAX_SLOTS ); // todo: wasteful
+			ZeroMemory( hChildThread, sizeof(HANDLE) * MAX_SLOTS );
+
+			ptrdiff_t i = 0;
+			for( ; i < MAX_SLOTS; ++i )
 			{
-				_tcscpy_s( g_szTarget[ i ], CCHPATHEX, TARGET_UNDEF );
-				hp[ i ].iMyId = (int) i;
-
-				_tcscpy_s( ti[ i ].szPath, CCHPATH, TARGET_UNDEF );
-				_tcscpy_s( ti[ i ].szExe, CCHPATH, TARGET_UNDEF );
-
-				hp[ i ].lpTarget = &ti[ i ];
-				for( ptrdiff_t j = 0; j < 16; ++j )
-					hp[ i ].lpszStatus[ j ] = lpszStatus[ j ];
+				g_bHack[ i ] = FALSE;
+				ti[ i ].slotid = (int) i;
+				hSemaphore[ i ] = CreateSemaphore( NULL, 1L, 1L, NULL ); // todo : wasteful
 			}
+
+			for( i = 0; i < 18; ++i )
+				ppszStatus[ i ] = &(s_szStatus[ i ][ 0 ]);
 
 			for( i = 0; i < 4; ++i )
 			{
-				g_bHack[ i ] = FALSE;
-				hSemaphore[ i ] = CreateSemaphore( NULL, 1L, 1L, NULL );
 				hToolTip[ i ] = CreateTooltip( g_hInst, hButton[ i ], strToolTips[ i ] );
 				SendMessage( hButton[ i ], WM_SETFONT, (WPARAM) hFontItalic, 0L );
 			}
-			_tcscpy_s( lpszStatus[ 0 ], cchStatus, APP_LONGNAME );
-			_tcscpy_s( lpszStatus[ 1 ], cchStatus, _T( "Hit [a] for more info." ) );
+			_tcscpy_s( s_szStatus[ 0 ], cchStatus, APP_LONGNAME );
+			_tcscpy_s( s_szStatus[ 1 ], cchStatus, _T( "Hit [A] for more info." ) );
 
 			uMsgTaskbarCreated = RegisterWindowMessage( TEXT( "TaskbarCreated" ) );
 
-			TCHAR lpszTargetPath[ CCHPATH ];
-			TCHAR lpszTargetExe[ CCHPATH ];
-			TCHAR strOptions[ CCHPATH ];
+			TCHAR strTargetPath[ CCHPATH ] = _T("");
+			TCHAR strTargetExe[ CCHPATH ] = _T("");
+			TCHAR strOptions[ CCHPATH ] = _T("");
 
-			int iSlider = ParseArgs( GetCommandLine(), CCHPATH,
-											lpszTargetPath, lpszTargetExe, strOptions );
+			const TCHAR * lpszCommandLine = GetCommandLine();
 
-			if( IsOptionSet( strOptions, _T("--unlimit"), _T("-u") ) )
+			int aiParams[ 2 ] = { 0, 0 };
+			const int iSlider = ParseArgs( lpszCommandLine, CCHPATH,
+											strTargetPath, strTargetExe, strOptions,
+											fAllowMoreThan99, &aiParams[ 0 ] );
+
+			const DWORD pid = ParsePID( strTargetPath ); // v1.7.5
+
+			TCHAR dbgstr[ 128 ] = _T("");
+			_stprintf_s( dbgstr, _countof(dbgstr), _T("cycle=%d, delay=%d, pid=%lu @ WM_CREATE"), aiParams[0], aiParams[1], pid );
+			WriteDebugLog( dbgstr );
+
+			const BOOL bUnlimit = IsOptionSet( strOptions, _T("--unlimit"), _T("-u") );
+
+			if( pid )
 			{
-				iSlider = IGNORE_ARGV;
+				LimitPID( hWnd, &ti[ 0 ], pid, iSlider, bUnlimit, &aiParams[ 0 ] );
 			}
-			else if( IsOptionSet( strOptions, _T("--watch-multi"), NULL ) )
+			else if( iSlider == IGNORE_ARGV )
 			{
-				// Just created menu is not checked; toggle = check it & update ini
-				_toggle_opt_menu_item( hWnd, IDM_WATCH_MULTI, _T("WatchMulti") );
+				; // Do nothing
 			}
-			else
+			else if( IsOptionSet( strOptions, _T("--job-list"), _T("-J") ) )
 			{
-				const bool fWatchMulti = !! GetPrivateProfileInt( _T( "Options" ),
-												_T( "WatchMulti" ), FALSE, strIniPath );
-
-				CheckMenuItem( hMenu, IDM_WATCH_MULTI, 
-						(UINT)( fWatchMulti ? ( MF_BYCOMMAND | MFS_CHECKED )
-						: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
+				HandleJobList( hWnd, lpszCommandLine, fAllowMoreThan99, ti );
 			}
-			
-			if( iSlider != IGNORE_ARGV && *lpszTargetPath )
+			else if( 2 <= _tcslen( strTargetPath ) && ! bUnlimit )
 			{
-				if( 99 < iSlider && ! fAllowMoreThan99 )
-					iSlider = 99;
-
-				//WriteDebugLog( TEXT( "Runing from the command line..." ) );
-				const DWORD dwTargetProcess = PathToProcessID( lpszTargetPath );
-				if( IsProcessBES( dwTargetProcess ) )
-				{
-					WriteDebugLog( TEXT( "BES Can't Target BES" ) );
-				}
-				else
-				{
-					hp[ 2 ].lpTarget->dwProcessId = TARGET_PID_NOT_SET; // just in case
-					hp[ 2 ].lpTarget->fWatch = true;
-
-					if( iSlider >= SLIDER_MIN && iSlider <= SLIDER_MAX )
-					{
-						SetSliderIni( lpszTargetPath, iSlider );
-					}
-
-					SetTargetPlus( hWnd, &hChildThread[ 3 ], &hp[ 2 ], lpszTargetPath, lpszTargetExe );
-				}
+				// It's ok even if strTargetPath is an instance of BES.
+				// Watch and Hack both can handle such a situation properly.
+				ti[ 2 ].dwProcessId = TARGET_PID_NOT_SET; // (0) just in case
+				SetTargetPlus( hWnd, ti, strTargetPath, iSlider, &aiParams[ 0 ] );
 			}
 
-			NOTIFYICONDATA ni;
-			DWORD iDllVersion = InitNotifyIconData( hWnd, &ni, &ti[ 0 ] );
-			Shell_NotifyIcon( NIM_ADD, &ni );
-			
-			if( iDllVersion >= 5 )
-			{
-				ni.uVersion = NOTIFYICON_VERSION;
-				Shell_NotifyIcon( NIM_SETVERSION, &ni );
-			}
+			SendNotifyIconData( hWnd, ti, NIM_ADD );
 			
 			hCursor[ 0 ] = LoadCursor( (HINSTANCE) NULL, IDC_ARROW );
 			hCursor[ 2 ] = hCursor[ 1 ] = LoadCursor( (HINSTANCE) NULL, IDC_HAND );
 			SetCursor( hCursor[ 0 ] );
 
 			SetParent( hWnd, NULL );
-			
-			/*if( ! IsOptionSet( strOptions, _T("--minimize"), _T("-m") ) )
-			{
-				PostMessage( hWnd, WM_USER_CAPTION, 0, 1 );
-			}*/
-			break;
-		}
-		
-		case WM_GETICON:
-		case WM_USER_CAPTION:
-		{
-			if( wParam == 0 )
-			{
-				TCHAR strCurrentText[ MAX_WINDOWTEXT ] = _T("");
-				GetWindowText( hWnd, strCurrentText, (int) _countof(strCurrentText) );
-				if( _tcscmp( strCurrentText, lpszWindowText ) != 0 )
-					SendMessage( hWnd, WM_SETTEXT, 0, (LPARAM) lpszWindowText );
-			}
-			
-			if( uMessage == WM_USER_CAPTION )
-			{
-				break;
-			}
-
-			return DefWindowProc( hWnd, uMessage, wParam, lParam );
 			break;
 		}
 
-		case WM_NCUAHDRAWCAPTION:
-		{
-			TCHAR strCurrentText[ MAX_WINDOWTEXT ] = _T("");
-			GetWindowText( hWnd, strCurrentText, (int) _countof(strCurrentText) );
-			if( _tcscmp( strCurrentText, lpszWindowText ) != 0 )
-				SendMessage( hWnd, WM_SETTEXT, 0, (LPARAM) lpszWindowText );
-			return DefWindowProc( hWnd, uMessage, wParam, lParam );
-			break;
-		}
-
-		case WM_INITMENUPOPUP:
+		case WM_INITMENUPOPUP: // TODO: this does not necessary
 		{
 			if( LOWORD(lParam) != 2 || HIWORD(lParam) ) break;
 			
 			HMENU hMenu = GetMenu( hWnd );
-			if( wParam == (WPARAM) GetSubMenu( hMenu, 2 )  )
+			if( wParam == (WPARAM) GetSubMenu( hMenu, 2 ) )
 			{
-				/*EnableMenuItem( hMenu, IDM_ALLOWMORETHAN99, 
-					(UINT)( ( g_bHack[0] || g_bHack[1] || g_bHack[2] || g_bHack[3] )
-					? ( MF_GRAYED | MF_BYCOMMAND )
-					: ( MF_ENABLED | MF_BYCOMMAND ) ) );*/
-			
-				const TCHAR * strIniPath = GetIniPath();
-				const bool fAllowMulti = !! GetPrivateProfileInt( TEXT( "Options" ), 
-					TEXT( "AllowMulti" ), FALSE, strIniPath );
-				CheckMenuItem( hMenu, IDM_ALLOWMULTI, 
-					(UINT)( fAllowMulti ? ( MF_BYCOMMAND | MFS_CHECKED )
-					: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
+				CheckMenuItemI( hMenu, IDM_ALLOWMULTI, _T("AllowMulti"), GetIniPath() );
 			}
 			break;
 		}
@@ -360,30 +362,25 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 		case WM_SIZE:
 		{
 			if( wParam == SIZE_MINIMIZED )
-			{
 				ShowWindow( hWnd, SW_HIDE );
-			}
-
 			break;
 		}
 
 		case WM_MOVE:
 		{
-			if( ! IsIconic( hWnd ) )
-			{
+			if( IsWindowVisible( hWnd ) && ! IsIconic( hWnd ) )
 				SetWindowPosIni( hWnd );
-			}
 			break;				
 		}
 
 		case WM_USER_RESTART:
 		{
-			int id = (int) wParam;
-			if( id >= 0 && id <= 2 )
+			unsigned id = LOWORD( wParam );
+			if( id < MAX_SLOTS && id != 3 )
 			{
 				// prevent double restarting
 				if( WaitForSingleObject( hSemaphore[ id ], 200 ) == WAIT_OBJECT_0 )
-					SendMessage( hWnd, WM_USER_HACK, (WPARAM) id, (LPARAM) &hp[ id ] );
+					SendMessage( hWnd, WM_USER_HACK, (WPARAM) id, (LPARAM) &ti[ id ] );
 				else
 					MessageBox( hWnd, TEXT( "Semaphore Error" ), APP_NAME, MB_OK | MB_ICONSTOP );
 			}
@@ -392,73 +389,65 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 
 		case WM_USER_HACK:
 		{
-	//		DWORD dwChildThreadId;
-			int iMyId = ( int ) wParam;
-			if( ! ( iMyId >= 0 && iMyId < 3 ) ) break;
-
-			LPTARGETINFO lpTarget = ( (LPHACK_PARAMS) lParam )->lpTarget;
+			unsigned iMyId = LOWORD( wParam );
+			if( MAX_SLOTS <= iMyId || iMyId == 3 || ! lParam ) break;
+			if( hChildThread[ iMyId ] )
+			{
+#ifdef _DEBUG
+				MessageBox( hWnd, _T("hChildThread[ iMyId ] is not NULL"), NULL, MB_ICONSTOP );
+#endif
+				break;
+			}
+			TARGETINFO * lpTarget = (TARGETINFO*) lParam;
 			lpTarget->fRealTime = g_fRealTime;
+			lpTarget->fUnlimited = false;
 			g_bHack[ iMyId ] = TRUE;
-			/*SECURITY_ATTRIBUTES sa;
-			sa.nLength = sizeof( SECURITY_ATTRIBUTES );
-			sa.lpSecurityDescriptor = NULL;
-			sa.bInheritHandle = FALSE;*/
 
-			hChildThread[ iMyId ] = CreateThread2( &Hack, (void *)(LONG_PTR) lParam );
+			hChildThread[ iMyId ] = CreateThread2( &Hack, (void *) lParam );
 
 			if( hChildThread[ iMyId ] == NULL )
 			{
 				ReleaseSemaphore( hSemaphore[ iMyId ], 1L, (LPLONG) NULL );
 				g_bHack[ iMyId ] = FALSE;
 				MessageBox( hWnd, TEXT( "CreateThread failed." ), APP_NAME, MB_OK | MB_ICONSTOP );
-				break;
 			}
 			else
 			{
-/*
-				if( g_bRealTime )
-				{
-					SetThreadPriority( hChildThread[ iMyId ],
-						THREAD_PRIORITY_TIME_CRITICAL );
-				}
-				else
-				{
-					SetThreadPriority( hChildThread[ iMyId ], THREAD_PRIORITY_NORMAL );
-				}
-*/
+///				SetThreadPriority( hChildThread[ iMyId ], THREAD_PRIORITY_TIME_CRITICAL );
 
-				SetThreadPriority( hChildThread[ iMyId ], THREAD_PRIORITY_TIME_CRITICAL );
-
-				g_dwTargetProcessId[ iMyId ] = lpTarget->dwProcessId;
-				_tcscpy_s( g_szTarget[ iMyId ], CCHPATHEX, lpTarget->szPath );
-
+				TCHAR lpszWindowText[ MAX_WINDOWTEXT ] = _T("");
 				_stprintf_s( lpszWindowText, _countof(lpszWindowText), _T( "%s - Active%s" ), APP_LONGNAME,
 					g_fRealTime ? _T( " (Real-time mode)" ) : _T( "" ) );
 
 				SetWindowText( hWnd, lpszWindowText );
-				UpdateStatus( hWnd );
+				SendMessage( hWnd, WM_USER_STOP, JUST_UPDATE_STATUS, STOPF_LESS_FLICKER );
 			}
 			break;
 		}
 
 		case WM_USER_STOP:
 		{
-			TCHAR str[ 1024 ];
-			_stprintf_s( str, _countof(str), _T( "WM_USER_STOP: wParam = 0x%04lX , lParam = 0x%04lX" ), wParam, (UINT) lParam );
+			TCHAR szStr[ 128 ];
+			_stprintf_s( szStr, _countof(szStr),
+				_T( "WM_USER_STOP: wParam = 0x%04lX , lParam = 0x%04lX" ), wParam, (UINT) lParam );
+			WriteDebugLog( szStr );
 
-			WriteDebugLog( str );
+			unsigned iMyId = LOWORD( wParam );
 
-			int iMyId = (int) wParam;
-
-			if( iMyId < 0 || iMyId > 3 ) break;
-
-			if( iMyId != JUST_UPDATE_STATUS )
+			if( iMyId < MAX_SLOTS && iMyId != 3 )
 			{
 				g_bHack[ iMyId ] = FALSE;
+
+				// FIX: race condition 2014-03-27
+				if( ! hChildThread[ iMyId ] ) break;
+
 				DWORD dwExitCode = (DWORD) -1;
-				const DWORD dwWaitResult = WaitForSingleObject( hSemaphore[ iMyId ], 1000UL );
+				DWORD dwWaitResult = WaitForSingleObject( hSemaphore[ iMyId ], 1000 );
+				ti[ iMyId ].fUnlimited = ( lParam & STOPF_UNLIMIT )? true : false ;
+
 				if( dwWaitResult == WAIT_OBJECT_0 )
 				{
+#if 0
 					for( int t = 0; t < 50; t++ )
 					{
 						GetExitCodeThread( hChildThread[ iMyId ], &dwExitCode );
@@ -468,35 +457,53 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 						}
 						Sleep( 50UL );
 					}
+#else
+					// Typically one has to wait less-than-1 ~ about 20 ms
+					if( ! WaitForSingleObject( hChildThread[ iMyId ], 250 ) == WAIT_OBJECT_0 )
+						WriteDebugLog(_T("###Bad Wait###"));
 
-					_stprintf_s( str, _countof(str), _T( "ChildThread[ %d ] : ExitCode = 0x%04lX" ), iMyId, dwExitCode );
-					WriteDebugLog( str );
-					ReleaseSemaphore( hSemaphore[ iMyId ], 1L, (LPLONG) NULL );
-					_stprintf_s( lpszStatus[ 0 + iMyId * 4 ], cchStatus,
-						_T( "Target #%d %s" ),
-						iMyId + 1,
-						dwExitCode == NORMAL_TERMINATION ? _T( "OK" )	:
-						dwExitCode == THREAD_NOT_OPENED ? _T( "Access denied" ) :
-						dwExitCode == TARGET_MISSING ? _T( "Target missinig" ) :
-						dwExitCode == STILL_ACTIVE ?  _T( "Time out" ) :
-						dwExitCode == NOT_WATCHING ? _T( "Unwatch: OK" ) : _T( "Status unknown" )
-					);
-
-					if( hChildThread[ iMyId ] )
+					GetExitCodeThread( hChildThread[ iMyId ], &dwExitCode );
+#endif
+					_stprintf_s( szStr, _countof(szStr), 
+						_T( "ChildThread[ %d ] : ExitCode = 0x%04lX" ), iMyId, dwExitCode );
+					WriteDebugLog( szStr );
+					ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
+					if( iMyId < 3 )
 					{
-						CloseHandle( hChildThread[ iMyId ] );
-						hChildThread[ iMyId ] = NULL;
+						_stprintf_s( s_szStatus[ 0 + iMyId * 4 ], cchStatus,
+									_T( "Target #%d %s" ),
+									iMyId + 1,
+									dwExitCode == NORMAL_TERMINATION ? _T( "OK" )
+									: dwExitCode == THREAD_NOT_OPENED ? _T( "Access denied" )
+									: dwExitCode == TARGET_MISSING ? _T( "Target missinig" )
+									: dwExitCode == STILL_ACTIVE ? _T( "Time out" )
+									: _T( "Status unknown" ) );
 					}
 				}
 				else
 				{
 					WriteDebugLog( TEXT( "### Semaphore Error ###" ) );
 					if( hChildThread[ iMyId ] )
+					{
 						GetExitCodeThread( hChildThread[ iMyId ], &dwExitCode );
-					_stprintf_s( str, _countof(str), _T( "ChildThread[ %d ] : ExitCode = 0x%04lX" ), iMyId, dwExitCode );
-					WriteDebugLog( str );
-					_stprintf_s( lpszStatus[ 0 + iMyId * 4 ], cchStatus, _T( "Target #%d Semaphore Error" ), iMyId + 1 );
+					}
+					_stprintf_s( szStr, _countof(szStr), 
+							_T( "ChildThread[ %d ] : ExitCode = 0x%04lX" ), iMyId, dwExitCode );
+					WriteDebugLog( szStr );
+
+					if( iMyId < 3 )
+					{
+						_stprintf_s( s_szStatus[ 0 + iMyId * 4 ], cchStatus,
+									_T( "Target #%d Semaphore Error" ), iMyId + 1 );
+					}
 				}
+
+				if( hChildThread[ iMyId ] )
+				{
+					CloseHandle( hChildThread[ iMyId ] );
+					hChildThread[ iMyId ] = NULL;
+				}
+
 
 				EnableWindow( hButton[ 0 ], TRUE );
 				EnableMenuItem( GetMenu( hWnd ), IDM_LIST, MF_BYCOMMAND | MF_ENABLED );
@@ -504,52 +511,62 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			
 			if( IsActive() )
 			{
-				TCHAR strStatus[ 1024 ] = TEXT( " Limiting CPU load:" );
 #ifdef _UNICODE
 				if( IS_JAPANESE )
 				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_JPN_2000, -1, strStatus, 1023 );
+					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_JPN_2000, -1, s_szLimitingStatus, _countof(s_szLimitingStatus) );
 				}
 				else if( IS_FINNISH )
 				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_FIN_2000, -1, strStatus, 1023 );
+					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_FIN_2000, -1, s_szLimitingStatus, _countof(s_szLimitingStatus) );
 				}
 				else if( IS_SPANISH )
 				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_SPA_2000, -1, strStatus, 1023 );
+					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_SPA_2000, -1, s_szLimitingStatus, _countof(s_szLimitingStatus) );
 				}
 				else if( IS_CHINESE_T )
 				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_CHI_2000T, -1, strStatus, 1023 );
+					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_CHI_2000T, -1, s_szLimitingStatus, _countof(s_szLimitingStatus) );
 				}
 				else if( IS_CHINESE_S )
 				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_CHI_2000S, -1, strStatus, 1023 );
+					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_CHI_2000S, -1, s_szLimitingStatus, _countof(s_szLimitingStatus) );
 				}
 				else if( IS_FRENCH )
 				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_FRE_2000, -1, strStatus, 1023 );
+					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_FRE_2000, -1, s_szLimitingStatus, _countof(s_szLimitingStatus) );
 				}
+				else
 #endif
-				if( g_bHack[ 0 ] )
 				{
-					_tcscat_s( strStatus, _countof(strStatus), _T( " #1" ) );
+					_tcscpy_s( s_szLimitingStatus, _countof(s_szLimitingStatus),
+								_T(" Limiting CPU load:") );
 				}
 				
-				if( g_bHack[ 1 ] )
+				ptrdiff_t e = 0;
+				TCHAR buf[ 128 ];
+				int numOfActiveSlots = 0;
+				for( ; e < MAX_SLOTS && numOfActiveSlots < 7; ++e )
 				{
-					_tcscat_s( strStatus, _countof(strStatus), _T( " #2" ) );
-				}
-				
-				if( g_bHack[ 2 ] )
-				{
-					if( g_dwTargetProcessId[ 2 ] != WATCHING_IDLE )
+					if( e == 3 ) continue;
+					if( g_bHack[ e ] )
 					{
-						_tcscat_s( strStatus, _countof(strStatus), _T( " #3" ) );
+						_stprintf_s( buf, _countof(buf), _T(" #%d"), (int)( e < 3 ? e + 1 : e ) );
+						_tcscat_s( s_szLimitingStatus, _countof(s_szLimitingStatus), buf );
+						++numOfActiveSlots;
 					}
 				}
-		
-				_stprintf_s( lpszStatus[ 12 ], cchStatus, _T( "%.256s" ), strStatus );
+				const int num1 = numOfActiveSlots;
+				for( ; e < MAX_SLOTS; ++e ) { if( g_bHack[ e ] ) ++numOfActiveSlots; }
+				if( numOfActiveSlots )
+				{
+					_stprintf_s( buf, _countof(buf),
+								_T("%s\n   %d slot%s active"),
+									( num1 < numOfActiveSlots ) ? _T(" etc.") : _T(""),
+									numOfActiveSlots,
+									( numOfActiveSlots != 1 ? _T("s are") :_T(" is") ));
+					_tcscat_s( s_szLimitingStatus, _countof(s_szLimitingStatus), buf );
+				}
 
 				EnableWindow( hButton[ 1 ], TRUE );
 				EnableMenuItem( GetMenu( hWnd ), IDM_STOP, MF_BYCOMMAND | MF_ENABLED );
@@ -564,10 +581,10 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				SendMessage( hWnd, WM_SETICON, ICON_BIG, (LPARAM) LoadIcon( g_hInst, MAKEINTRESOURCE( IDI_ACTIVE ) ) );
 				SendMessage( hWnd, WM_SETICON, ICON_SMALL, (LPARAM) LoadIcon( g_hInst, MAKEINTRESOURCE( IDI_ACTIVE ) ) );
 			}
-			else
+			else // not active
 			{
-				*lpszStatus[ 12 ] = _T('\0');
-				if( g_dwTargetProcessId[ 2 ] == WATCHING_IDLE )
+				*s_szLimitingStatus = _T('\0');
+				if( g_bHack[ 3 ] /*g_dwTargetProcessId[ 2 ] == WATCHING_IDLE*/ )
 				{
 					EnableWindow( hButton[ 1 ], TRUE );
 					EnableMenuItem( GetMenu( hWnd ), IDM_STOP, MF_BYCOMMAND | MF_ENABLED );
@@ -576,7 +593,8 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				{
 					EnableWindow( hButton[ 1 ], FALSE );
 				}
-				if( g_dwTargetProcessId[ 0 ] || g_dwTargetProcessId[ 1 ] || g_dwTargetProcessId[ 2 ] )
+				if( ti[ 0 ].dwProcessId || ti[ 1 ].dwProcessId || ti[ 2 ].dwProcessId
+					|| g_bHack[ 3 ] )
 				{
 					EnableWindow( hButton[ 2 ], TRUE );
 					EnableMenuItem( GetMenu( hWnd ), IDM_SETTINGS, MF_BYCOMMAND | MF_ENABLED );
@@ -596,6 +614,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				SendMessage( hWnd, WM_SETICON, ICON_BIG, (LPARAM) LoadIcon( g_hInst, MAKEINTRESOURCE( IDI_IDLE ) ) );
 				SendMessage( hWnd, WM_SETICON, ICON_SMALL, (LPARAM) LoadIcon( g_hInst, MAKEINTRESOURCE( IDI_IDLE ) ) );
 
+				TCHAR lpszWindowText[ MAX_WINDOWTEXT ] = _T("");
 				_stprintf_s( lpszWindowText, _countof(lpszWindowText), _T( "%s - Idle%s" ), APP_LONGNAME,
 					g_fRealTime ? _T( " (Real-time mode)" ) : _T( "" ) );
 				SetWindowText( hWnd, lpszWindowText );
@@ -603,51 +622,36 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 
 			if( g_bHack[ 3 ] )
 			{
-				EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
+				//EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
 				EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_ENABLED );
-			}
-			else if( g_bHack[ 2 ] )
-			{
-				EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
-				EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED );
 			}
 			else
 			{
-				EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
+				//EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
 				EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED );
 			}
 
-			if( g_bHack[ 0 ] && g_bHack[ 1 ] && ( g_bHack[ 2 ] || g_bHack[ 3 ] ) )
+			/*if( g_bHack[ 0 ] && g_bHack[ 1 ] && ( g_bHack[ 2 ] || g_bHack[ 3 ] ) )
 			{
 				EnableWindow( hButton[ 0 ], FALSE );
 				EnableMenuItem( GetMenu( hWnd ), IDM_LIST, MF_BYCOMMAND | MF_GRAYED );
 			}
-			else
+			else*/
 			{
 				EnableWindow( hButton[ 0 ], TRUE );
 				EnableMenuItem( GetMenu( hWnd ), IDM_LIST, MF_BYCOMMAND | MF_ENABLED );
 			}
 
-			if( g_bHack[ 2 ] || g_bHack[ 3 ] )
+			/**if( g_bHack[ 2 ] || g_bHack[ 3 ] )
 			{
 				EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
 			}
 			else
 			{
 				EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
-			}
+			}**/
 
-			NOTIFYICONDATA ni;
-			InitNotifyIconData( hWnd, &ni, &ti[ 0 ] );
-
-///* XP won't work NIF_INFO here...
-/*
-			if( g_bHack[ 2 ] && g_bHack[ 3 ] && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE && iDllVersion >= 5 )
-			{
-				ni.uFlags = NIF_ICON | NIF_INFO | NIF_TIP;
-			}
-*/
-			Shell_NotifyIcon( NIM_MODIFY, &ni );
+			SendNotifyIconData( hWnd, ti, NIM_MODIFY );
 
 			if( g_hSettingsDlg )
 				SendMessageTimeout( g_hSettingsDlg, WM_USER_REFRESH, 0, 0,
@@ -661,114 +665,52 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				SetFocus( hWnd );//*** v1.3.8: needed if a just-disabled button was focused
 
 			if( !( lParam & STOPF_NO_INVALIDATE ) )
-				InvalidateRect( hWnd, NULL, FALSE );
+			{
+				RECT rc;
+				GetClientRect( hWnd, &rc );
+				if( lParam & STOPF_LESS_FLICKER ) rc.right = 475L;
+				InvalidateRect( hWnd, &rc, FALSE );
+			}
 			break;
 		}
 
 		case WM_USER_NOTIFYICON:
 		{
-			static BOOL bClicked = FALSE;
+			static bool fClicked = false;
+			static bool fContextMenuOn = false;
+
+#ifdef NOTIFYICON_VERSION_4
+			if( HIWORD(lParam) != NI_ICONID ) break;
+			lParam = LOWORD(lParam);
+#else
+			if( wParam != NI_ICONID ) break;
+#endif
 			if( lParam == WM_LBUTTONDOWN )
 			{
-				bClicked = TRUE;
+				fClicked = true;
 			}
-			else if( lParam == WM_LBUTTONUP || lParam == WM_LBUTTONDBLCLK || lParam == NIN_KEYSELECT || lParam == NIN_SELECT )
+			else if( lParam == WM_LBUTTONUP	|| lParam == WM_LBUTTONDBLCLK
+					|| lParam == NIN_KEYSELECT || lParam == NIN_SELECT )
 			{
-				if( bClicked || lParam != WM_LBUTTONUP )
+				if( fClicked || lParam != WM_LBUTTONUP )
 				{
 					ShowWindow( hWnd, SW_RESTORE );
 					SetForegroundWindow( hWnd );
 				}
-				bClicked = FALSE;
+				fClicked = false;
 			}
-			else if( lParam == WM_RBUTTONUP )
+			else if( lParam == WM_RBUTTONUP || lParam == WM_CONTEXTMENU )
 			{
-				bClicked = FALSE;
-
-				HMENU hMenu = CreatePopupMenu();
-				POINT pt;
-				/*
-				if( GetShell32Version() >= 5 )
-				{
-					AppendMenu( hMenu, MFT_STRING, IDM_TRAY_STATUS, TEXT( "&Status" ) );
-					AppendMenu( hMenu, MFT_SEPARATOR, 0U, NULL );
-				}*/
-
-				TCHAR str[ 3 ][ 256 ];
-#ifdef _UNICODE 
-				if( IS_JAPANESE )
-				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, JPN_24, -1, str[ 0 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, JPN_5, -1, str[ 1 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, JPN_26, -1, str[ 2 ], 255 );
-				}
-				else if( IS_FINNISH )
-				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, FIN_24, -1, str[ 0 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, FIN_5, -1, str[ 1 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, FIN_26, -1, str[ 2 ], 255 );
-				}
-				else if( IS_SPANISH )
-				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, SPA_24, -1, str[ 0 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, SPA_5, -1, str[ 1 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, SPA_26, -1, str[ 2 ], 255 );
-				}
-				else if( IS_CHINESE_T )
-				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, CHT_24, -1, str[ 0 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, CHT_5, -1, str[ 1 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, CHT_26, -1, str[ 2 ], 255 );
-				}
-				else if( IS_CHINESE_S )
-				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, CHS_24, -1, str[ 0 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, CHS_5, -1, str[ 1 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, CHS_26, -1, str[ 2 ], 255 );
-				}
-				else if( IS_FRENCH )
-				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, FRE_24, -1, str[ 0 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, FRE_5, -1, str[ 1 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, FRE_26, -1, str[ 2 ], 255 );
-				}
-				else
-				{
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, ENG_24, -1, str[ 0 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, ENG_5, -1, str[ 1 ], 255 );
-					MultiByteToWideChar( CP_UTF8, MB_CUTE, ENG_26, -1, str[ 2 ], 255 );
-				}
-#else
-				strcpy_s( str[ 0 ], 256, _T( "&Restore BES" ) );
-				strcpy_s( str[ 1 ], 256, _T( "&Unlimit all" ) );
-				strcpy_s( str[ 2 ], 256, _T( "E&xit" ) );
-#endif
-				AppendMenu( hMenu, MFT_STRING, IDM_SHOWWINDOW, str[ 0 ] );
-				AppendMenu( hMenu, MFT_SEPARATOR, 0U, NULL );
-				if( ! IsIconic( hWnd ) )
-				{
-					EnableMenuItem( hMenu, IDM_SHOWWINDOW, MF_BYCOMMAND | MF_GRAYED );
-				}
-
-				AppendMenu( hMenu, MFT_STRING, IDM_STOP_FROM_TRAY, str[ 1 ] );
-
-				AppendMenu( hMenu, MFT_SEPARATOR, 0U, NULL );
-				if( ! IsActive() && ! g_bHack[ 3 ] )
-				{
-					EnableMenuItem( hMenu, IDM_STOP_FROM_TRAY, MF_BYCOMMAND | MF_GRAYED );
-				}
+				fClicked = false;
 				
-				AppendMenu( hMenu, MFT_STRING, IDM_EXIT_FROM_TRAY, str[ 2 ] );
-
-				EnableMenuItem( hMenu, IDM_EXIT_FROM_TRAY,
-					( (UINT) MF_BYCOMMAND | ( IsActive() ? MF_GRAYED : MF_ENABLED ) )
-				);
-
-				GetCursorPos( &pt );
-				SetForegroundWindow( hWnd );
-				TrackPopupMenu( hMenu, TPM_RIGHTBUTTON | TPM_TOPALIGN | TPM_LEFTALIGN,
-					pt.x, pt.y, 0, hWnd, (LPRECT) NULL );
-				DestroyMenu( hMenu );
+				// Handling WM_CONTEXTMENU is enough on WinXP; not sure if we get WM_CONTEXTMENU
+				// on Win2K.  On VK_APPS, only WM_CONTEXTMENU comes.
+				if( ! fContextMenuOn )
+				{
+					fContextMenuOn = true;
+					NotifyIcon_OnContextMenu( hWnd );
+					fContextMenuOn = false;
+				}
 			}
 			break;
 		}
@@ -903,63 +845,181 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				TCHAR strTargetPath[ CCHPATH ] = _T("");
 				TCHAR strTargetExe[ CCHPATH ] = _T("");
 				TCHAR strOptions[ CCHPATH ] = _T("");
-				int iSlider = ParseArgs( strCommand, CCHPATH, strTargetPath, strTargetExe, strOptions );
-				
-				if( iSlider == IGNORE_ARGV )
+
+				HMENU hMenu = GetMenu( hWnd );
+				bool fAllowMoreThan99 = IsMenuChecked( hMenu, IDM_ALLOWMORETHAN99 );
+				int aiParams[ 2 ] = { 0, 0 };
+				const int iSlider = ParseArgs( strCommand, CCHPATH, strTargetPath, strTargetExe, strOptions, fAllowMoreThan99, &aiParams[ 0 ] );
+
+				const DWORD pid = ParsePID( strTargetPath ); // v1.7.5
+
+				TCHAR dbgstr[ 128 ] = _T("");
+				_stprintf_s( dbgstr, _countof(dbgstr), _T("cycle=%d, delay=%d, pid=%lu @ WM_COPYDATA"), aiParams[0], aiParams[1], pid );
+				WriteDebugLog( dbgstr );
+
+				const BOOL bUnlimit = IsOptionSet( strOptions, _T("--unlimit"), _T("-u") );
+
+				if( pid )
+				{
+					LimitPID( hWnd, &ti[ 0 ], pid, iSlider, bUnlimit, &aiParams[ 0 ] );
+					bHandled = TRUE;
+					break;
+				}
+				else if( iSlider == IGNORE_ARGV )
 				{
 					bHandled = TRUE;
 					break;
 				}
-				HMENU hMenu = GetMenu( hWnd );
-				if( 99 < iSlider && ! IsMenuChecked( hMenu, IDM_ALLOWMORETHAN99 ) )
-					iSlider = 99;
+				else if( IsOptionSet( strOptions, _T("--hide"), NULL ) )
+				{
+					g_fHide = true;
+					ShowWindow( hWnd, SW_HIDE );
+					DeleteNotifyIcon( hWnd );
+					bHandled = TRUE;
+					break;
+				}
+				else if( IsOptionSet( strOptions, _T("--reshow"), NULL ) )
+				{
+					g_fHide = false;
+					SendNotifyIconData( hWnd, ti, NIM_ADD );
+					bHandled = TRUE;
+					break;
+				}
+				else if( IsOptionSet( strOptions, _T("--job-list"), _T("-J") ) )
+				{
+					HandleJobList( hWnd, strCommand, fAllowMoreThan99, ti );
+					bHandled = TRUE;
+					break;
+				}
 
-				if( IsOptionSet( strOptions, _T("--watch-multi"), NULL )
+				BOOL bAdd = IsOptionSet( strOptions, _T("--add"), _T("-a") ) && ( 2 <= _tcslen( strTargetPath ) );
+
+				const TCHAR * pStar = _tcschr( strTargetPath, _T('*') );
+				if( iSlider != -1 && strTargetExe[ 0 ] && ! pStar )
+				{
+					SetSliderIni( strTargetExe, iSlider );
+				}
+#if 0
+				if( ( bAdd || IsOptionSet( strOptions, _T("--watch-multi"), NULL ) )
 					&&
 					! IsMenuChecked( hMenu, IDM_WATCH_MULTI ) )
 				{
 					_toggle_opt_menu_item( hWnd, IDM_WATCH_MULTI, _T("WatchMulti") );
 				}
-
-				DWORD rgPID[ 3 ] = {0L,0L,0L};
-				ptrdiff_t numOfPIDs = 0;
-				while( numOfPIDs < 3 )
+#endif
+				PATHINFO pathInfo;
+				ZeroMemory( &pathInfo, sizeof(PATHINFO) );
+				if( pStar )
 				{
-					const DWORD pid = PathToProcessID( strTargetPath, rgPID, numOfPIDs );
-					if( pid == (DWORD) -1 )
-						break;
+					pathInfo.cchHead = (size_t)( pStar - strTargetPath );
+					pathInfo.cchTail = _tcslen( pStar + 1 );
+				}
+				pathInfo.cchPath = _tcslen( strTargetPath );
+				pathInfo.slider = iSlider;
+				if( aiParams[ 0 ] != -1 ) pathInfo.wCycle = (WORD) aiParams[ 0 ];
+				if( aiParams[ 1 ] != -1 ) pathInfo.wDelay = (WORD) aiParams[ 1 ];
 
-					if( ! IsProcessBES( pid ) )
-						rgPID[ numOfPIDs++ ] = pid;
+				if( g_bHack[ 3 ] && bAdd )
+				{
+					size_t cchMem = pathInfo.cchPath + 1;
+					TCHAR * lp = TcharAlloc( cchMem );
+					if( ! lp ) return TRUE;
+					_tcscpy_s( lp, cchMem, strTargetPath );
+
+					pathInfo.pszPath = lp;
+					
+					for( ptrdiff_t sx = 0; sx < MAX_SLOTS; ++sx ) // (1) Update Sliders and/or ReLimit if needed
+					{
+						if( sx != 3 && ( g_bHack[ sx ] || ti[ sx ].fUnlimited ) )
+						{
+							const TCHAR * q = ti[ sx ].disp_path
+												? ti[ sx ].disp_path : ti[ sx ].lpPath ;
+							if( PathEqual( pathInfo, q, _tcslen( q ), false ) )
+							{
+								if( iSlider != -1 ) g_Slider[ sx ] = iSlider;
+								ti[ sx ].fUnlimited = false;
+								if( aiParams[ 0 ] != -1 ) ti[ sx ].wCycle = (WORD) aiParams[ 0 ];
+								if( aiParams[ 1 ] != -1 ) ti[ sx ].wDelay = (WORD) aiParams[ 1 ];
+							}
+						}
+					}
+					
+					if( WaitForSingleObject( hReconSema, 1000 ) == WAIT_OBJECT_0 ) // (2) Update the g_arPathInfo table (esp. if the target is new)
+					{
+						if( 1 <= g_nPathInfo && g_nPathInfo < MAX_WATCH )
+						{
+							ptrdiff_t px = 0;
+							for( ; px < g_nPathInfo; ++px )
+							{
+								if( StrEqualNoCase( strTargetPath,  g_arPathInfo[ px ].pszPath ) )
+								{
+									TcharFree( g_arPathInfo[ px ].pszPath );
+									break;
+								}
+							}
+							memcpy( &g_arPathInfo[ px ], &pathInfo, sizeof(PATHINFO) );
+							if( g_nPathInfo == px ) ++g_nPathInfo;
+						}
+						ReleaseSemaphore( hReconSema, 1L, NULL );
+					}
+					PostMessage( hWnd, WM_USER_STOP, JUST_UPDATE_STATUS, STOPF_NO_INVALIDATE );
+					return (LRESULT) TRUE; // bHandled
+				} // if( g_bHack[ 3 ] && bAdd )
+
+				if( ( aiParams[ 0 ] != -1 || aiParams[ 1 ] != -1 ) && 1 <= g_nPathInfo && g_nPathInfo < MAX_WATCH ) // Update the g_arPathInfo table
+				{
+					if( WaitForSingleObject( hReconSema, 1000 ) == WAIT_OBJECT_0 )
+					{
+						for( ptrdiff_t px = 0; px < g_nPathInfo; ++px )
+						{
+							if( StrEqualNoCase( strTargetPath,  g_arPathInfo[ px ].pszPath ) )
+							{
+								if( aiParams[ 0 ] != -1 ) g_arPathInfo[ px ].wCycle = (WORD) aiParams[ 0 ];
+								if( aiParams[ 1 ] != -1 ) g_arPathInfo[ px ].wDelay = (WORD) aiParams[ 1 ];
+								break;
+							}
+						}
+						ReleaseSemaphore( hReconSema, 1L, NULL );
+					}
 				}
 
-				const BOOL bUnlimit = IsOptionSet( strOptions, _T("--unlimit"), _T("-u") );
+				pathInfo.pszPath = strTargetPath; // used in the "while" below
+
+				ptrdiff_t numOfPIDs = 0;
+				DWORD * rgPIDs = PathToProcessIDs( pathInfo, numOfPIDs ); //TODO what if rgPIDs=NULL?
 				const BOOL bToggle = ! bUnlimit && IsOptionSet( strOptions, _T("--toggle"), _T("-t") );
 				BOOL bRewatch = FALSE;
 				
-				for( ptrdiff_t n = 0; n < numOfPIDs; ++n )
+				for( ptrdiff_t i = 0; i < MAX_SLOTS; ++i )
 				{
-					for( ptrdiff_t i = 0; i < 3; ++i )
+					if( i == 3 || ! g_bHack[ i ] && ! ti[ i ].fUnlimited ) continue; //TODO
+					for( ptrdiff_t n = 0; n < numOfPIDs; ++n )
 					{
-						if( rgPID[ n ] == g_dwTargetProcessId[ i ] )
+						if( rgPIDs[ n ] == ti[ i ].dwProcessId )
 						{
-							if( iSlider != 0 && g_Slider[ i ] != iSlider )
+							if( iSlider != -1 )
 							{
 								g_Slider[ i ] = iSlider;
-								RECT minirect;
-								SetRect( &minirect, 20, 20 + 90 * (int) i, 479, 40 + 90 * (int) i );
-								InvalidateRect( hWnd, &minirect, FALSE );
-								SetSliderIni( strTargetPath, iSlider );
+								if( pStar )
+								{
+									const TCHAR * q = ti[ i ].disp_path;
+									if( ! q ) q = ti[ i ].lpPath;
+									SetSliderIni( q, iSlider );
+								}
 							}
+
+							if( aiParams[ 0 ] != -1 ) ti[ i ].wCycle = (WORD) aiParams[ 0 ];
+							if( aiParams[ 1 ] != -1 ) ti[ i ].wDelay = (WORD) aiParams[ 1 ];
 
 							if( g_bHack[ i ] ) // currently limited
 							{
 								if( bUnlimit || bToggle )
 								{
-									SendMessage( hWnd, WM_USER_STOP, (WPARAM) i, 0 );
-
 									if( i == 2 && g_bHack[ 3 ] )
 										SendMessage( hWnd, WM_COMMAND, IDM_UNWATCH, 0 );
+
+									g_bHack[ i ] = FALSE;
+									SendMessage( hWnd, WM_USER_STOP, (WPARAM) i, STOPF_UNLIMIT );
 								}
 							}
 							else if( i == 2 && ! g_bHack[ 2 ] && ! g_bHack[ 3 ] ) // unwatched/unlimited
@@ -973,11 +1033,13 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 
 							bHandled = TRUE;
 							
-							break; // next n
-						} // pid found
-					} // for i
-				} // for n
-				
+							break;  // break the inner loop; next i
+						} // pid mapped to slot
+					} // for n
+				} // for i
+
+				if( rgPIDs ) MemFree( rgPIDs );
+
 				if( bHandled && ! bRewatch )
 					break;
 
@@ -992,16 +1054,18 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				// Unwatch
 				if( ! bHandled && g_bHack[ 3 ] )// watching idly
 				{
-#ifdef UNICODE
-					if( Lstrcmpi( strTargetPath, hp[ 2 ].lpTarget->szPath ) == 0 )
+#if 1 // ANSIFIX
+					if( ti[ 2 ].disp_path && StrEqualNoCase( ti[ 2 ].disp_path, strTargetPath )
+						||
+						ti[ 2 ].lpPath && StrEqualNoCase( ti[ 2 ].lpPath, strTargetPath ) )
 #else
 					// In non-Unicode, a watched target path may be a full-path, an exe-only path,
 					// or possibly a 15-character truncated version of a long exe name.
-					if( Lstrcmpi( strTargetPath, hp[ 2 ].lpTarget->szPath ) == 0
-						|| _strnicmp( strTargetExe, hp[ 2 ].lpTarget->szPath, 15 ) == 0 )
+					if( _stricmp( strTargetPath, ti[ 2 ].szPath ) == 0
+						|| _strnicmp( strTargetExe, ti[ 2 ].szPath, 15 ) == 0 )
 #endif
 					{
-						if( iSlider != 0 )
+						if( SLIDER_MIN <= iSlider )
 							g_Slider[ 2 ] = iSlider;
 
 						if( bUnlimit || bToggle )
@@ -1013,19 +1077,17 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 
 				if( bUnlimit // unlimit it; don't watch
 					|| ( bToggle && bHandled ) && ! bRewatch // toggle-handled; don't watch (in this case g_bHack[ 3 ] is true anyway)
-					|| ( g_bHack[ 2 ] || g_bHack[ 3 ] ) // no free slot to watch
+					|| g_bHack[ 3 ]
 				) break;
 
-				hp[ 2 ].lpTarget->dwProcessId = TARGET_PID_NOT_SET; // reset
+				ti[ 2 ].dwProcessId = TARGET_PID_NOT_SET; // reset
 
-				if( iSlider >= SLIDER_MIN && iSlider <= SLIDER_MAX )
-					SetSliderIni( strTargetPath, iSlider );
 
-#if ! defined(UNICODE)
-				strcpy_s( strTargetPath, CCHPATH, strTargetExe );
+#if ! defined(_UNICODE)
+				//strcpy_s( strTargetPath, CCHPATH, strTargetExe );//ANSIFIX7
 #endif
 
-				SetTargetPlus( hWnd, &hChildThread[ 3 ], &hp[ 2 ], strTargetPath, strTargetExe );
+				SetTargetPlus( hWnd, ti, strTargetPath, iSlider, &aiParams[ 0 ] );
 				bHandled = TRUE;
 				break;
 			}
@@ -1034,7 +1096,8 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				break;
 			}
 
-			SendMessage( hWnd, WM_USER_STOP, JUST_UPDATE_STATUS, STOPF_NO_INVALIDATE );
+			// Post?
+			PostMessage( hWnd, WM_USER_STOP, JUST_UPDATE_STATUS, STOPF_NO_INVALIDATE );
 
 			return (LRESULT) bHandled;
 			break;
@@ -1045,6 +1108,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			const UINT id = LOWORD( wParam );
 			const UINT eventCode = HIWORD( wParam );
 
+			// Buttons : may get various event notifications
 			if( id == IDM_LIST || id == IDM_STOP || id == IDM_SETTINGS || id == IDM_EXIT )
 			{
 				if( eventCode == 0 && lParam == 0 /*Menu*/
@@ -1062,263 +1126,67 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			{
 				case IDM_LIST:
 					/*g_hListDlg = CreateDialogParam(
-									(HINSTANCE) GetModuleHandle( NULL ), 
-									MAKEINTRESOURCE( IDD_LIST ), 
-									NULL, 
+									g_hInst,
+									MAKEINTRESOURCE(IDD_LIST), 
+									hWnd, 
 									&xList, 
 									(LPARAM) hp );*/
 
-					DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_LIST), hWnd,
-									&xList, (LPARAM) hp );
+					DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_LIST), hWnd, &xList, (LPARAM) ti );
 					break;
 
-#if 0
-				{
-
-					/*if( !g_bHack[ 0 ] && WaitForSingleObject( hSemaphore[ 0 ], 100UL ) == WAIT_OBJECT_0 ) iMyId = 0;
-					else if( !g_bHack[ 1 ] && WaitForSingleObject( hSemaphore[ 1 ], 100UL ) == WAIT_OBJECT_0 ) iMyId = 1;
-					else if( !g_bHack[ 2 ] && WaitForSingleObject( hSemaphore[ 2 ], 100UL ) == WAIT_OBJECT_0 ) iMyId = 2;
-					else
-					{
-						MessageBox( hWnd, TEXT( "Semaphore Error" ), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
-						break;
-					}*/
-
-					//hp[ iMyId ].iMyId = iMyId;
-					DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_LIST), hWnd,
-									&xList, (LPARAM) hp );
-
-					//if( iReturn == XLIST_CANCELED )
-					{
-					//	ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-					//	break;
-					}
-					/*else if( iReturn == XLIST_RESTART_0 || iReturn == XLIST_RESTART_1 || iReturn == XLIST_RESTART_2 )
-					{
-						// WM_USER_RESTART gets sema on its own
-						ReleaseSemaphore( hSemaphore[ iMyId ], 1L, (LONG *) NULL );
-						SendMessage( hWnd, WM_USER_RESTART, (WPARAM) iReturn, 0L );
-						break;
-					}*/
-					/*else if( iReturn == XLIST_NEW_TARGET )
-					{
-						int iValue = GetSliderIni( hp[ iMyId ].lpTarget->szPath, hWnd );
-						if( 99 < iValue && ! IsMenuChecked( hWnd, IDM_ALLOWMORETHAN99 ) )
-							iValue = 99;
-
-						g_Slider[ iMyId ] = iValue;
-
-						TCHAR str[ 1024 ];
-						_stprintf_s( str, _countof(str), _T( "GetSliderIni( \"%s\" ) = %d" ),
-										hp[ iMyId ].lpTarget->szPath, g_Slider[ iMyId ] );
-						WriteDebugLog( str );
-
-						SendMessage( hWnd, WM_USER_HACK, (WPARAM) iMyId, (LPARAM) &hp[ iMyId ] );
-						break;
-					}*/
-					/**else if( iReturn == XLIST_WATCH_THIS )
-					{
-						if( g_bHack[ 3 ] )
-						{
-							MessageBox( hWnd, TEXT( "Busy3" ), APP_NAME, MB_ICONEXCLAMATION | MB_OK );
-//							ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-							break;
-						}
-
-						if( !g_bHack[ 2 ] && WaitForSingleObject( hSemaphore[ 2 ], 100 ) == WAIT_OBJECT_0 ) iMyId = 2;
-						else if( !g_bHack[ 1 ] && WaitForSingleObject( hSemaphore[ 1 ], 100 ) == WAIT_OBJECT_0 ) iMyId = 1;
-						else if( !g_bHack[ 0 ] && WaitForSingleObject( hSemaphore[ 0 ], 100 ) == WAIT_OBJECT_0 ) iMyId = 0;
-						else
-						{
-							MessageBox( hWnd, TEXT( "Semaphore Error" ), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
-							break;
-						}
-						
-						CopyTarget( hp[ 3 ], hp[ iMyId ] );//## use the 4th guy for now 20140309
-
-						// Slot2 is already taken and active: we will get slot 2 after moving
-						// the current target @ slot 2 to slot iMyId
-						if( iMyId != 2 && g_bHack[ 2 ] )
-						{
-							TARGETINFO tgtInfo;
-							memset( &tgtInfo, 0, sizeof(TARGETINFO) );
-							HACK_PARAMS newTarget;
-							memset( &newTarget, 0, sizeof(HACK_PARAMS) );
-							newTarget.lpTarget = &tgtInfo;
-							CopyTarget( hp[ iMyId ], newTarget ); // this will be new thing @ 2
-
-							if( newTarget.lpTarget->dwProcessId != hp[ 2 ].lpTarget->dwProcessId )
-							{
-								// Prepare to move old target @ 2 to the new slot @ iMyId
-								CopyTarget( hp[ 2 ], hp[ iMyId ] );
-								g_dwTargetProcessId[ iMyId ] = g_dwTargetProcessId[ 2 ];
-								// Don't clear hp[2]. It's still active at this moment.
-
-								// hp[2] will be cleared by the called
-								SendMessage( hWnd, WM_USER_STOP, (WPARAM) 2, 0 );
-
-								// wait until slot 2 is free again
-								for( int ms = 0; g_bHack[ 2 ] && ms < 2000; ms += 100 )
-									Sleep( 100 );
-
-								SendMessage( hWnd, WM_USER_HACK, (WPARAM) iMyId, (LPARAM) &hp[ iMyId ] );
-								// Do NOT release sema for iMyId; it'll be used by old target@2
-							}
-							else
-							{
-								// If old@2 and new@2 are the same (i.e. if we're gonna watch what
-								// we are already limiting but not watching), just stop #2 then
-								// (re)start to watch #2. The slot @ iMyId is freed.
-								ClearTarget( hp[ iMyId ] );
-								g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
-								_tcscpy_s( g_szTarget[ iMyId ], CCHPATHEX, TARGET_UNDEF );
-								for( ptrdiff_t i = 0 + iMyId * 4; i < 4 + iMyId * 4; ++i )
-									*lpszStatus[ i ] = _T('\0');
-
-								ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-
-								// hp[2] will be cleared by the called
-								SendMessage( hWnd, WM_USER_STOP, (WPARAM) 2, 0 );
-
-								// wait until slot 2 is free again
-								for( int ms = 0; g_bHack[ 2 ] && ms < 2000; ms += 100 )
-									Sleep( 100 );
-							}
-
-							hp[ 2 ].iMyId = 2; // ?
-							CopyTarget( newTarget, hp[ 2 ] );
-						}
-						else if( iMyId != 2 ) // but the slot 2 is free
-						{
-							hp[ 2 ].iMyId = 2; // ?
-
-							CopyTarget( hp[ iMyId ], hp[ 2 ] );
-
-							ClearTarget( hp[ iMyId ] );
-							g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
-							_tcscpy_s( g_szTarget[ iMyId ], CCHPATHEX, TARGET_UNDEF );
-							for( ptrdiff_t i = 0 + iMyId * 4; i < 4 + iMyId * 4; ++i )
-								*lpszStatus[ i ] = _T('\0');
-
-							ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-						}
-						else // iMyId  = 2
-						{
-							ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-						}
-
-						SetTargetPlus( hWnd, &hChildThread[ 3 ], &hp[ 2 ],
-										hp[ 2 ].lpTarget->szPath, hp[ 2 ].lpTarget->szExe );
-						break;
-					} // END OF iReturn == XLIST_WATCH_THIS**/
-					/*else if( iReturn == XLIST_UNFREEZE )
-					{
-						SendMessage( hWnd, WM_COMMAND, (WPARAM) IDM_STOP, (LPARAM) 0 );
-						Sleep( 1000 );
-						if( Unfreeze( hWnd, hp[ iMyId ].lpTarget->dwProcessId ) )
-						{
-							MessageBox( hWnd, TEXT( "Successful!" ),
-										TEXT( "Unfreezing" ), MB_ICONINFORMATION | MB_OK );
-						}
-						else
-						{
-							MessageBox( hWnd, TEXT( "An error occurred.\r\nPlease retry." ),
-										TEXT( "Unfreezing" ), MB_ICONEXCLAMATION | MB_OK );
-						}
-						ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL );
-						break;
-					}*/
-					//break;
-				}
-#endif
 				case IDM_WATCH:
-					SelectWatch( hWnd, &hChildThread[ 3 ], &hp[ 2 ] );
+					SelectWatch( hWnd, ti );
 					break;
 
 				case IDM_UNWATCH:
 					WriteDebugLog( TEXT( "IDM_UNWATCH" ) );
-					if( Unwatch( hSemaphore[ 3 ], hChildThread[ 3 ], g_bHack[ 3 ] ) )
-					{
+					if( Unwatch( ti ) )
 						EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED );
-					}
+					break;
+
+				case IDM_SHOWWATCHLIST: // 2017-11-03
+					ShowWatchList( hWnd );
 					break;
 
 				case IDM_STOP:
-				{
-					WriteDebugLog( TEXT( "IDM_STOP" ) );
-					if( g_bHack[ 3 ] ) // Watching...
-					{
-						Unwatch( hSemaphore[ 3 ], hChildThread[ 3 ], g_bHack[ 3 ] );
-					}
-
-					for( ptrdiff_t g = 0; g < 3; ++g )
-					{
-						if( g_bHack[ g ] )
-							SendMessage( hWnd, WM_USER_STOP, (WPARAM) g, 0 );
-					}
-					break;
-				}
-
 				case IDM_STOP_FROM_TRAY:
 				{
-					WriteDebugLog( TEXT( "IDM_STOP_FROM_TRAY" ) );
-					if( g_bHack[ 3 ] ) // Watching...
+					WriteDebugLog( TEXT( "IDM_STOP" ) );
+					
+					if( g_bHack[ 3 ] ) Unwatch( ti );
+
+					bool fStopIt[ MAX_SLOTS ];
+					ptrdiff_t slotid = 0;
+					for( ; slotid < MAX_SLOTS; ++slotid )
 					{
-						Unwatch( hSemaphore[ 3 ], hChildThread[ 3 ], g_bHack[ 3 ] );
+						if( slotid != 3 && g_bHack[ slotid ] )
+						{
+							fStopIt[ slotid ] = true;
+							g_bHack[ slotid ] = FALSE;
+						}
+						else fStopIt[ slotid ] = false;
 					}
 
-					for( ptrdiff_t g = 0; g < 3; ++g )
+					for( slotid = 0; slotid < MAX_SLOTS; ++slotid )
 					{
-						if( g_bHack[ g ] )
-							SendMessage( hWnd, WM_USER_STOP, (WPARAM) g, STOP_FROM_TRAY );
+						if( fStopIt[ slotid ] )
+							SendMessage( hWnd, WM_USER_STOP, (WPARAM) slotid, 0 );
 					}
 					break;
 				}
 				
 				case IDM_SETTINGS:
-				{
 					DialogBoxParam( g_hInst, MAKEINTRESOURCE( IDD_SETTINGS ), hWnd, 
-									&Settings, (LPARAM) hp[ 0 ].lpszStatus );
-					UpdateStatus( hWnd ); // <-- 1.0 beta2
+									&Settings, (LPARAM) &ti[ 0 ] );
+					UpdateStatus( hWnd );
 		 			break;
-				}
 
 				case IDM_REALTIME:
-				{
-					// toggle the mode...
 					g_fRealTime = ! g_fRealTime;
-
-					// Change the priority
-					SetRealTimeMode( hWnd,
-						g_fRealTime,
-						lpszWindowText,
-						_countof(lpszWindowText)
-					);
+					SetRealTimeMode( hWnd, g_fRealTime );
 					break;
-				}
 
-#if 0
-				case IDM_DEBUGPRIVILEGE:
-				{
-					HMENU hMenu = GetMenu( hWnd );
-					bool fEnable =
-						!( MF_CHECKED & GetMenuState( hMenu, 
-							IDM_DEBUGPRIVILEGE, MF_BYCOMMAND ) );
-					CheckMenuItem( hMenu, 
-						IDM_DEBUGPRIVILEGE, 
-						(UINT)( fEnable ? ( MF_BYCOMMAND | MFS_CHECKED )
-						: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
-					
-					const TCHAR * strIniPath = GetIniPath();
-					WritePrivateProfileString(
-						TEXT( "Options" ), 
-						TEXT( "DebugPrivilege" ),
-						fEnable ? TEXT( "1" ) : TEXT( "0" ),
-						strIniPath
-					);
-					break;
-				}
-#endif
 				case IDM_ALLOWMORETHAN99:
 				{
 					HMENU hMenu = GetMenu( hWnd );
@@ -1327,11 +1195,9 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 					bool fAllowMoreThan99 = IsMenuChecked( hMenu, IDM_ALLOWMORETHAN99 );
 					
 					// new state
-					fAllowMoreThan99 = !fAllowMoreThan99;
+					fAllowMoreThan99 = ! fAllowMoreThan99;
 
-					CheckMenuItem( hMenu, IDM_ALLOWMORETHAN99, 
-									(UINT)( fAllowMoreThan99 ? ( MF_BYCOMMAND | MFS_CHECKED )
-											: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
+					CheckMenuItemB( hMenu, IDM_ALLOWMORETHAN99, fAllowMoreThan99 );
 
 					bool fUpdated = false;
 					if( ! fAllowMoreThan99 )
@@ -1346,18 +1212,13 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 						}
 					}
 					
-					const TCHAR * strIniPath = GetIniPath();
-					WritePrivateProfileString(
-						TEXT( "Options" ), 
-						TEXT( "AllowMoreThan99" ),
-						fAllowMoreThan99 ? TEXT( "1" ) : TEXT( "0" ),
-						strIniPath );
+					WritePrivateProfileString( TEXT("Options"), TEXT("AllowMoreThan99"),
+						fAllowMoreThan99 ? TEXT("1") : TEXT("0"), GetIniPath() );
 
 					if( fUpdated )
 						UpdateStatus( hWnd );
 					break;
 				}
-
 
 				case IDM_LOGGING:
 				{
@@ -1400,19 +1261,24 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				}
 
 				case IDM_ALLOWMULTI:
-					_toggle_opt_menu_item( hWnd, id, _T("AllowMulti") );
+					toggle_opt_menu_item( hWnd, id, _T("AllowMulti"), 1 );
 					break;
-
 				case IDM_ALWAYS_LISTALL:
-					_toggle_opt_menu_item( hWnd, id, _T("ListAll") );
+					toggle_opt_menu_item( hWnd, id, _T("ListAll"), 2 );
 					break;
 
+				case IDM_LOWER_PRIVILEGE:
+					toggle_opt_menu_item( hWnd, id, _T("LowerPriv"), 1 );
+					break;
+
+#if 0
 				case IDM_WATCH_MULTI:
 					_toggle_opt_menu_item( hWnd, id, _T("WatchMulti") );
 					break;
+#endif
 
 				case IDM_DISABLE_F1:
-					_toggle_opt_menu_item( hWnd, id, _T("DisableF1") );
+					toggle_opt_menu_item( hWnd, id, _T("DisableF1"), 1 );
 					break;
 
 				case IDM_WATCH_RT8:
@@ -1429,109 +1295,71 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 					break;
 
 				case IDM_SHOWWINDOW:
-				{
-					SendMessage( hWnd, WM_USER_NOTIFYICON, 0U, WM_LBUTTONDBLCLK );
+					if( ! g_fHide )
+					{
+						ShowWindow( hWnd, SW_RESTORE );
+						SetForegroundWindow( hWnd );
+					}
 					break;
-				}
 
 				case IDM_ABOUT:
-				{
-					DialogBoxParam( g_hInst, (LPCTSTR) IDD_ABOUTBOX, hWnd, &About, (LPARAM) hWnd );
+					DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, &About, (LPARAM) hWnd );
 		 			break;
-				}
 				
 				case IDM_HOMEPAGE:
-				{
 					OpenBrowser( APP_HOME_URL );
 					break;
-				}
 				
-				case IDM_GHOSTCENTER:
-				{
-					//OpenBrowser( TEXT( "http://ngc.sherry.jp/" ) );
-					OpenBrowser( TEXT( "http://www.aqrs.jp/ngc/" ) );
-					//OpenBrowser( TEXT( "http://ghosttown.mikage.jp/" ) );
-					break;
-				}
-				
-				case IDM_UKAGAKA:
-				{
-					OpenBrowser( TEXT( "http://usada.sakura.vg/" ) );
-					break;
-				}
-				
-				case IDM_SSP:
-				{
-					OpenBrowser( TEXT( "http://ssp.shillest.net/" ) );
-					break;
-				}
-/*
-				case IDM_CROW:
-				{
-					OpenBrowser( TEXT( "http://crow.aqrs.jp/" ) );
-					break;
-				}
-*/
 				case IDM_ABOUT_SHORTCUTS:
-				{
 					AboutShortcuts( hWnd );
 					break;
-				}
 
 				case IDM_HELP_CMDLINE:
 					ShowCommandLineHelp( hWnd );
 					break;
 
 				case IDM_SKIN:
-				{
 					ChangeSkin( hWnd, hMemDC, SkinSize, hOrigBmp );
 					break;
-				}
 
 				case IDM_SNAP:
-				{
 					SaveSnap( hWnd );
 					break;
-				}
 
 				case IDM_EXIT_FROM_TRAY:
-				{
 					if( IsActive() )
-					{
-						//MessageBox( hWnd, TEXT( "Can't exit now because it's active." ),
-						//	APP_NAME, MB_OK | MB_ICONEXCLAMATION );
 						SendMessage( hWnd, WM_COMMAND, IDM_STOP, 0 );
-					}
 
 					Exit_CommandFromTaskbar( hWnd );
 				    break;
-				}
 				
 				case IDM_EXIT:
-				{
-					SendMessage( hWnd, WM_CLOSE, 0U, 0 );
+					SendMessage( hWnd, WM_CLOSE, 0, 0 );
 				    break;
-				}
 				
 				case IDM_EXIT_ANYWAY:
-				{
 					ShowWindow( hWnd, SW_HIDE );
-					
-					SendMessage( hWnd, WM_COMMAND, (WPARAM) IDM_STOP, 0L );
-					Sleep( 2000ul );
-					SendMessage( hWnd, WM_CLOSE, 0U, 0L );
+					SendMessage( hWnd, WM_COMMAND, (WPARAM) IDM_STOP, 0 );
+					Sleep( 2000 );
+					SendMessage( hWnd, WM_CLOSE, 0, 0 );
 					break;
-				}
 
 				case IDM_GSHOW:
-				{
 					GShow( hWnd );
 					break;
-				}
 
-				case IDM_MINIMIZE: // unofficial VK_M handler
+				case IDM_MINIMIZE: // VK_M: undocumented
 				{
-					ShowWindow( hWnd, SW_HIDE );
+					if( ! g_fHide )
+					{
+						if( g_hListDlg )
+							SendMessage( g_hListDlg, WM_COMMAND, IDCANCEL, 0 );
+					
+						if( g_hSettingsDlg )
+							SendMessage( g_hSettingsDlg, WM_COMMAND, IDCANCEL, 0 );
+						
+						ShowWindow( hWnd, SW_SHOWMINIMIZED );
+					}
 					break;
 				}
 
@@ -1648,8 +1476,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 					InvalidateRect( hWnd, (LPRECT) NULL, 0 );
 					break;
 				}
-
-#endif
+#endif // _UNICODE
 				default:
 					break;
 			}
@@ -1662,7 +1489,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			if( iMouseDown == -1 ) break;
 
 			int iPrevCursor = iCursor;
-			iCursor = MainWindowUrlHit( lParam );
+			iCursor = MainWindowUrlHit( lParam, urlrect );
 			if( iCursor == 1 && iMouseDown == 1 ) iCursor = 2;
 
 /*
@@ -1689,7 +1516,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 		{
 			SetCapture( hWnd );
 			
-			if( MainWindowUrlHit( lParam ) )
+			if( MainWindowUrlHit( lParam, urlrect ) )
 			{
 				iMouseDown = 1;
 				SetCursor( hCursor[ 1 ] );
@@ -1708,7 +1535,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 		{
 			ReleaseCapture();
 			
-			if( iMouseDown == 1 && MainWindowUrlHit( lParam ) )
+			if( iMouseDown == 1 && MainWindowUrlHit( lParam, urlrect ) )
 			{
 				OpenBrowser( APP_HOME_URL );
 			}
@@ -1721,14 +1548,14 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 
 		case WM_LBUTTONDBLCLK:
 		{
-			if( MainWindowUrlHit( lParam ) ) break;
+			if( MainWindowUrlHit( lParam, urlrect ) ) break;
 			
 			POINT pt = {0};
 			GetCursorPos( &pt );
 			ScreenToClient( hWnd, &pt );
 			if( ChildWindowFromPoint( hWnd, pt ) != hWnd ) break;
 
-			ChangeSkin( hWnd, hMemDC, SkinSize, hOrigBmp );
+			SendMessage( hWnd, WM_COMMAND, IDM_SKIN, 0 );
 			break;
 		}
 
@@ -1772,7 +1599,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 					return DefWindowProc( hWnd, uMessage, wParam, lParam );
 
 				if( ChildWindowFromPoint( hWnd, ptClient ) != hWnd
-					|| MainWindowUrlHit( MAKELPARAM( ptClient.x, ptClient.y ) ) )
+					|| MainWindowUrlHit( MAKELPARAM( ptClient.x, ptClient.y ), urlrect ) )
 					break;
 			}
 			else // VK_APPS or Shift+F10
@@ -1789,6 +1616,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				AppendMenu( hMenu, MF_STRING, IDM_MINIMIZE, TEXT( "&Boss (Minimize)" ) );
 				AppendMenu( hMenu, MF_SEPARATOR, 0u, NULL );
 				AppendMenu( hMenu, MF_STRING, IDM_SKIN, TEXT( "Ski&n..." ) );
+				if( ! hMemDC ) EnableMenuItem( hMenu, IDM_SKIN, MF_BYCOMMAND | MF_GRAYED );
 				TrackPopupMenuEx( hMenu, flags, (int) ptScreen.x, (int) ptScreen.y, hWnd, NULL );
 				DestroyMenu( hMenu );
 			}
@@ -1810,16 +1638,17 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 
 			HDC hdc = BeginPaint( hWnd, &ps );
 			const int iSaved = SaveDC( hdc );
+			SetTextAlign( hdc, TA_TOP | TA_LEFT );
 
 			DrawSkin( hdc, hMemDC, SkinSize );
 
 			HFONT hOldFont = NULL;
 			
-			if( _tcscmp( lpszStatus[ 0 ], APP_LONGNAME ) == 0 )
+			if( _tcscmp( s_szStatus[ 0 ], APP_LONGNAME ) == 0 )
 			{
 				hOldFont = SelectFont( hdc, hFontItalic );
 #ifdef _UNICODE
-				_tcscpy_s( lpszStatus[ 2 ], cchStatus, _T( "Unicode Build / " ) );
+				_tcscpy_s( s_szStatus[ 2 ], cchStatus, _T( "Unicode Build / " ) );
 
 				if( IS_JAPANESE )
 				{
@@ -1827,44 +1656,44 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 					MultiByteToWideChar( CP_UTF8, MB_CUTE,
 						IS_JAPANESEo ? S_JPNo_0001 : S_JPN_0001,
 						-1, str, cchStatus );
-					_tcscat_s( lpszStatus[ 2 ], cchStatus, str );
+					_tcscat_s( s_szStatus[ 2 ], cchStatus, str );
 				}
 				else if( IS_FINNISH )
 				{
 					WCHAR str[ cchStatus ] = L"";
 					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_FIN_0001, -1, str, cchStatus );
-					_tcscat_s( lpszStatus[ 2 ], cchStatus, str );
+					_tcscat_s( s_szStatus[ 2 ], cchStatus, str );
 				}
 				else if( IS_SPANISH )
 				{
 					WCHAR str[ cchStatus ] = L"";
 					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_SPA_0001, -1, str, cchStatus );
-					_tcscat_s( lpszStatus[ 2 ], cchStatus, str );
+					_tcscat_s( s_szStatus[ 2 ], cchStatus, str );
 				}
 				else if( IS_CHINESE_T )
 				{
 					WCHAR str[ cchStatus ] = L"";
 					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_CHI_0001T, -1, str, cchStatus );
-					_tcscat_s( lpszStatus[ 2 ], cchStatus, str );
+					_tcscat_s( s_szStatus[ 2 ], cchStatus, str );
 				}
 				else if( IS_CHINESE_S )
 				{
 					WCHAR str[ cchStatus ] = L"";
 					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_CHI_0001S, -1, str, cchStatus );
-					_tcscat_s( lpszStatus[ 2 ], cchStatus, str );
+					_tcscat_s( s_szStatus[ 2 ], cchStatus, str );
 				}
 				else if( IS_FRENCH )
 				{
 					WCHAR str[ cchStatus ] = L"";
 					MultiByteToWideChar( CP_UTF8, MB_CUTE, S_FRE_0001, -1, str, cchStatus );
-					_tcscat_s( lpszStatus[ 2 ], cchStatus, str );
+					_tcscat_s( s_szStatus[ 2 ], cchStatus, str );
 				}
 				else
 				{
-					_tcscat_s( lpszStatus[ 2 ], cchStatus, L"English" );
+					_tcscat_s( s_szStatus[ 2 ], cchStatus, L"English" );
 				}
 #else
-				strcpy_s( lpszStatus[ 2 ], cchStatus, _T( "Non-Unicode Build" ) );
+				strcpy_s( s_szStatus[ 2 ], cchStatus, _T( "Non-Unicode Build" ) );
 #endif
 			}
 			else
@@ -1877,7 +1706,7 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 			int x = 30;
 			int y = 20;
 
-			TextOut( hdc, x, y, lpszStatus[ 0 ], (int) _tcslen( lpszStatus[ 0 ] ) );
+			TextOut( hdc, x, y, s_szStatus[ 0 ], (int) _tcslen( s_szStatus[ 0 ] ) );
 			y += 20;
 
 			SelectFont( hdc, g_hFont );
@@ -1887,25 +1716,39 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				if( i % 4 == 0 ) SetTextColor( hdc, RGB( 0x99, 0xff, 0x66 ) );
 				else if( i % 4 == 3 ) SetTextColor( hdc, RGB( 0x66, 0xee, 0xee ) );
 				else SetTextColor( hdc, RGB( 0xff, 0xff, 0x99 ) );
-				TextOut( hdc, x, y, lpszStatus[ i ], (int) _tcslen( lpszStatus[ i ] ) );
+				TextOut( hdc, x, y, s_szStatus[ i ], (int) _tcslen( s_szStatus[ i ] ) );
 				y += 20;
 				if( i % 4 == 3 ) y += 10;
 			}
-			TextOut( hdc, x + 20, y, lpszStatus[ 12 ], (int) _tcslen( lpszStatus[ 12 ] ) );
+			
+			RECT rcLimStatus;
+			SetRect( &rcLimStatus, x + 20, y - 5, 530, y + 40 );
+			SetTextColor( hdc, RGB( 0xe0, 0xf0, 0x30 ) );
+			DrawText( hdc, s_szLimitingStatus, (int) _tcslen( s_szLimitingStatus ), &rcLimStatus,
+						DT_END_ELLIPSIS | DT_LEFT | DT_NOCLIP | DT_TOP | DT_WORDBREAK );
+
+			/*else
+			{
+				TextOut( hdc, x + 20, y, s_szStatus[ 12 ], (int) _tcslen( s_szStatus[ 12 ] ) );
+			}*/
+			
 			SetTextColor( hdc, RGB( 0xff, 0xff, 0xcc ) );
 			x += 40;
-			y += 20;
-			TextOut( hdc, x, y + 20, lpszStatus[ 13 ], (int) _tcslen( lpszStatus[ 13 ] ) );
-			TextOut( hdc, x, y + 40, lpszStatus[ 14 ], (int) _tcslen( lpszStatus[ 14 ] ) );
-			TextOut( hdc, x, y + 60, lpszStatus[ 15 ], (int) _tcslen( lpszStatus[ 15 ] ) );
+			y += 35 + 20;
+			for( ptrdiff_t sx = 13; sx < 18; ++sx, y += 20 )
+				TextOut( hdc, x, y, s_szStatus[ sx ], (int) _tcslen( s_szStatus[ sx ] ) );
 
-
-			HFONT hFontURL = GetFontForURL( hdc );
+			HFONT hFontURL = GetFontForURL( hdc, 10.0 );
 			SelectFont( hdc, hFontURL );
 
 			SetTextColor( hdc, iCursor == 0? RGB( 0x66, 0x99, 0x99 ) :
 				iCursor == 1? RGB( 0x66, 0xff, 0xff ) : RGB( 0xff, 0xcc, 0x00 ) );
-			TextOut( hdc, 425, 400, APP_HOME_URL, (int) _tcslen( APP_HOME_URL ) );
+
+			TextOut( hdc, urlrect.left, urlrect.top, APP_HOME_URL, 28 );
+			SIZE size;
+			GetTextExtentPoint32( hdc, APP_HOME_URL, 28, &size );
+			urlrect.right = urlrect.left + size.cx;
+			urlrect.bottom = urlrect.top + size.cy;
 
 			SelectFont( hdc, hOldFont );
 			DeleteFont( hFontURL );
@@ -1919,9 +1762,10 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 #define FIRST_PRESSED( lParam ) ( ! ( ((ULONG_PTR)lParam) & 0xC0000000 ) )
 #define KEY_CONTEXT_1( lParam ) (     (lParam) & 0x20000000L   )
 
-			// ALT + T (&Target): Valid unless the language is Finnish; if Finnish, ALT + T
+			// [Alt]+[T] (&Target) handler: Valid unless the language is Finnish; if Finnish, ALT + T
 			// is for the File menu ("&Tiedosto") by system def handling.
-			if( wParam == 'T'
+			// Note [T] without [Alt] is also a valid (single key) hotkey for &Target.
+			if( wParam == _T('T')
 				&& FIRST_PRESSED( lParam )
 				&& KEY_CONTEXT_1( lParam )
 				&& GetLanguage() != LANG_FINNISH )
@@ -1950,8 +1794,12 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				const UINT uMenuState = GetMenuState( GetMenu( hWnd ), IDM_DISABLE_F1, MF_BYCOMMAND );
 				if( ! (uMenuState & MF_CHECKED) )
 				{
-					PostMessage( hWnd, WM_COMMAND, IDM_ABOUT_SHORTCUTS, 0 );
+					PostMessage( hWnd, WM_COMMAND, (WPARAM) IDM_ABOUT_SHORTCUTS, 0 );
 				}
+			}
+			else if( wParam == VK_F2 && ! REPEATED_KEYDOWN( lParam ) )
+			{
+				PostMessage( hWnd, WM_COMMAND, (WPARAM) IDM_HELP_CMDLINE, 0 );
 			}
 
 			return DefWindowProc( hWnd, uMessage, wParam, lParam );
@@ -1965,8 +1813,11 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				WriteDebugLog( TEXT( "EXIT_ANYWAY?" ) );
 
 				// Just in case
-				ShowWindow( hWnd, SW_SHOWDEFAULT );
-				SetForegroundWindow( hWnd );
+				if( ! g_fHide )
+				{
+					ShowWindow( hWnd, SW_SHOWDEFAULT );
+					SetForegroundWindow( hWnd );
+				}
 
 				TCHAR msg[ 1024 ] = TEXT( "BES is active. Exiting now is risky.\r\n\r\nExit anyway?" );
 #ifdef _UNICODE
@@ -2006,20 +1857,28 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				WriteDebugLog( TEXT( "User wants to exit anyway" ) );
 			}
 
-			SendMessage( hWnd, WM_COMMAND, (WPARAM) IDM_STOP, 0L );
+			SendMessage( hWnd, WM_COMMAND, (WPARAM) IDM_STOP, 0 );
 
-			if(
-				WaitForSingleObject( hSemaphore[ 0 ], 1000 ) == WAIT_OBJECT_0 &&
-				WaitForSingleObject( hSemaphore[ 1 ], 1000 ) == WAIT_OBJECT_0 &&
-				WaitForSingleObject( hSemaphore[ 2 ], 1000 ) == WAIT_OBJECT_0 &&
-				WaitForSingleObject( hSemaphore[ 3 ], 1000 ) == WAIT_OBJECT_0
-			)
+			int nOK = 0;
+			ptrdiff_t i = 0;
+			for( ; i < MAX_SLOTS; ++ i )
+			{
+				DWORD dwResult = WaitForSingleObject( hSemaphore[ i ], 250 );
+				if( dwResult == WAIT_OBJECT_0 ) ++nOK;
+#ifdef _DEBUG
+				else
+				{
+					TCHAR s[100];_stprintf_s(s,100,_T("\tSema bad #%d\n"),(int)i);
+					OutputDebugString(s);
+				}
+#endif
+			}
+			
+			if( nOK == MAX_SLOTS )
 			{
 				WriteDebugLog( TEXT( "[ All Semaphores OK ]" ) );
-				for( int i = 0; i < 4; i++ )
-				{
-					ReleaseSemaphore( hSemaphore[ i ], 1L, (LPLONG) NULL );
-				}
+				for( i = 0; i < MAX_SLOTS; ++i )
+					ReleaseSemaphore( hSemaphore[ i ], 1L, NULL );
 			}
 			else
 			{
@@ -2040,6 +1899,12 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				{
 					HBITMAP hBmp = SelectBitmap( hMemDC, hOrigBmp );
 					DeleteBitmap( hBmp );
+
+#ifdef _DEBUG
+TCHAR s[100];swprintf_s(s,100,L"\t&\tDeleting %p, Orig %p\n",hBmp,hOrigBmp);
+OutputDebugString(s);
+#endif
+
 					hOrigBmp = NULL;
 				}
 				
@@ -2047,46 +1912,60 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT uMessage, WPARAM wParam, LPARAM lParam
 				hMemDC = NULL;
 			}
 
-			NOTIFYICONDATA ni;
-			InitNotifyIconData( hWnd, &ni, &ti[ 0 ] );
-			Shell_NotifyIcon( NIM_DELETE, &ni );
-
+			DeleteNotifyIcon( hWnd );
 			DeleteFont( g_hFont );
 			g_hFont = NULL;
 			DeleteFont( hFontItalic );
 
-			for( int i = 0; i < 4; i++ ) 
+			for( ptrdiff_t i = MAX_SLOTS - 1; 0 <= i; --i )
 			{
-				if( hChildThread[ i ] ) CloseHandle( hChildThread[ i ] );
-				if( hSemaphore[ i ] ) CloseHandle( hSemaphore[ i ] );
+				if( hChildThread[ i ] )
+				{
+					CloseHandle( hChildThread[ i ] );
+					hChildThread[ i ] = NULL;
+				}
+				if( hSemaphore[ i ] )
+				{
+					CloseHandle( hSemaphore[ i ] );
+					hSemaphore[ i ] = NULL;
+				}
+
+				if( ti[ i ].lpPath )
+				{
+					HeapFree( GetProcessHeap(), 0, ti[ i ].lpPath );
+					ti[ i ].lpPath = NULL;
+				}
+				if( ti[ i ].disp_path )
+				{
+					HeapFree( GetProcessHeap(), 0, ti[ i ].disp_path );
+					ti[ i ].disp_path = NULL;
+				}
+				//if( ti[ i ].lpExe )
+				//{
+				//	HeapFree( GetProcessHeap(), 0, ti[ i ].lpExe );
+				//	ti[ i ].lpExe = NULL;
+				//}
 			}
 
 			PostQuitMessage( 0 );
-			
 			break;
 		}
 		
 		default:
-			if( uMessage == uMsgTaskbarCreated )
+			if( uMessage == uMsgTaskbarCreated && uMessage != 0 )
 			{
-				NOTIFYICONDATA ni;
-				DWORD iDllVersion = InitNotifyIconData( hWnd, &ni, &ti[ 0 ] );
-				Shell_NotifyIcon( NIM_ADD, &ni );
-				if( iDllVersion >= 5 )
-				{
-					ni.uVersion = NOTIFYICON_VERSION;
-					Shell_NotifyIcon( NIM_SETVERSION, &ni );
-				}
-				UpdateStatus( hWnd );
-				break;
+				SendNotifyIconData( hWnd, ti, NIM_ADD );
 			}
-			return DefWindowProc( hWnd, uMessage, wParam, lParam );
+			else
+			{
+				return DefWindowProc( hWnd, uMessage, wParam, lParam );
+			}
 			break;
    }
    return 0;
 }
 
-VOID SetRealTimeMode( HWND hWnd, bool fRealTime, LPTSTR lpszWindowText, size_t cchWindowText )
+static void SetRealTimeMode( HWND hWnd, bool fRealTime )
 {
 	g_fRealTime = fRealTime;
 	if( fRealTime )
@@ -2094,15 +1973,6 @@ VOID SetRealTimeMode( HWND hWnd, bool fRealTime, LPTSTR lpszWindowText, size_t c
 		SetPriorityClass( GetCurrentProcess(), REALTIME_PRIORITY_CLASS );
 //		SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL );
 		CheckMenuItem( GetMenu( hWnd ), IDM_REALTIME, MF_BYCOMMAND | MFS_CHECKED );
-/*
-		for( i = 0; i < 4; i++ )
-		{
-			if( g_bHack[ i ] && phChildThread[ i ] != NULL )
-			{
-				SetThreadPriority( phChildThread[ i ], THREAD_PRIORITY_HIGHEST );
-			}
-		}
-*/
 		WriteDebugLog( TEXT( "Real-time mode: Yes" ) );
 	}
 	else
@@ -2110,90 +1980,80 @@ VOID SetRealTimeMode( HWND hWnd, bool fRealTime, LPTSTR lpszWindowText, size_t c
 		SetPriorityClass( GetCurrentProcess(), HIGH_PRIORITY_CLASS );
 //		SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_NORMAL );
 		CheckMenuItem( GetMenu( hWnd ), IDM_REALTIME, MF_BYCOMMAND | MFS_UNCHECKED );
-/*
-		for( i = 0; i < 4; i++ )
-		{
-			if( g_bHack[ i ] && phChildThread[ i ] != NULL )
-			{
-				SetThreadPriority( phChildThread[ i ], THREAD_PRIORITY_NORMAL );
-			}
-		}
-*/
 		WriteDebugLog( TEXT( "Real-time mode: No" ) );
 	}
 
-	if( lpszWindowText != NULL )
-	{
-		_stprintf_s( lpszWindowText, cchWindowText, _T("%s - %s%s"),
-						APP_LONGNAME,
-						IsActive() ? _T("Active") : _T("Idle"),
-						fRealTime ? _T(" (Real-time mode)") : _T("") );
-		SetWindowText( hWnd, lpszWindowText );
-	}
+	TCHAR szWindowText[ MAX_WINDOWTEXT ] = _T("");
+	_stprintf_s( szWindowText, _countof(szWindowText), _T("%s - %s%s"),
+					APP_LONGNAME,
+					IsActive() ? _T("Active") : _T("Idle"),
+					fRealTime ? _T(" (Real-time mode)") : _T("") );
+	SetWindowText( hWnd, szWindowText );
 }
 
-static int MainWindowUrlHit( LPARAM lParam )
-{
-	int x = (int) LOWORD( lParam );
-	int y = (int) HIWORD( lParam );
-	return ( x > 424 && x < 619 && y > 401 && y < 418 );
-}
 
-static inline HFONT _create_font( LPCTSTR lpszFace, int iSize, BOOL bBold, BOOL bItalic )
+static HFONT _create_font( LPCTSTR lpszFace, int iSize, BOOL bBold, BOOL bItalic )
 {
 	return CreateFont( iSize,
 				0, 0, 0,
 				bBold ? FW_BOLD : FW_NORMAL,
-				(DWORD) (!! bItalic ),
+				(DWORD) bItalic,
 				0UL, 0UL,
 				DEFAULT_CHARSET,
-				//ANSI_CHARSET,
 				OUT_OUTLINE_PRECIS,
 				CLIP_DEFAULT_PRECIS,
 				DEFAULT_QUALITY,
 				FF_SWISS | VARIABLE_PITCH,
-				lpszFace
-			);
+				lpszFace );
 }
 
 
-static bool _toggle_opt_menu_item( HWND hWnd, UINT uMenuId, const TCHAR * pIniOptionName )
+static bool toggle_opt_menu_item( HWND hWnd, UINT uMenuId, const TCHAR * pIniOptionName, int nIfEnabled )
 {
 	HMENU hMenu = GetMenu( hWnd );
 	UINT uMenuState = GetMenuState( hMenu, uMenuId, MF_BYCOMMAND );
 	const bool fEnable = !( uMenuState & MFS_CHECKED ); // toggle
 
+	TCHAR szValue[ 10 ];
+	_stprintf_s( szValue, _countof(szValue), _T("%d"), fEnable ? nIfEnabled : 0 );
 	WritePrivateProfileString(
 		TEXT( "Options" ), 
 		pIniOptionName,
-		fEnable ? TEXT( "1" ) : TEXT( "0" ),
+		szValue,
 		GetIniPath() );
 	
-	CheckMenuItem( hMenu, uMenuId, 
-					(UINT)( fEnable ? ( MF_BYCOMMAND | MFS_CHECKED )
-					: ( MF_BYCOMMAND | MFS_UNCHECKED ) ) );
+	CheckMenuItemB( hMenu, uMenuId, fEnable );
 
 	return fEnable;
 }
 
-/*static void CopyTarget( const HACK_PARAMS& hp, HACK_PARAMS& hp2 )
+bool IsActive( void )
 {
-#if 0
-	hp2.lpTarget->dwProcessId = hp.lpTarget->dwProcessId;
-
-	hp2.lpTarget->iIFF = hp.lpTarget->iIFF;
-	_tcscpy_s( hp2.lpTarget->szExe, CCHPATH, hp.lpTarget->szExe );
-	_tcscpy_s( hp2.lpTarget->szPath, CCHPATH, hp.lpTarget->szPath );
-	_tcscpy_s( hp2.lpTarget->szText, MAX_WINDOWTEXT, hp.lpTarget->szText );
-#endif
-
-	*hp2.lpTarget = *hp.lpTarget;
+/*	return ( g_bHack[ 0 ]
+			|| g_bHack[ 1 ]
+			|| g_bHack[ 2 ] && g_dwTargetProcessId[ 2 ] != WATCHING_IDLE );
+*/
+	for( ptrdiff_t i = 0; i < MAX_SLOTS; ++i )
+	{
+		if( i != 3 && g_bHack[ i ] ) return true;
+	}
+	return false;
 }
-static void ClearTarget( HACK_PARAMS& hp )
+static void EnableLoggingIni( BOOL bEnabled )
 {
-	hp.lpTarget->dwProcessId = TARGET_PID_NOT_SET;
-	hp.lpTarget->iIFF = IFF_UNKNOWN;
-	_tcscpy_s( hp.lpTarget->szExe, CCHPATH, TARGET_UNDEF );
-	_tcscpy_s( hp.lpTarget->szPath, CCHPATH, TARGET_UNDEF );
-	hp.lpTarget->szText[ 0 ] = _T('\0');
-}*/
+	WritePrivateProfileString( TEXT("Options"), TEXT("Logging"),
+		bEnabled ? TEXT("1") : TEXT("0"), GetIniPath() );
+}
+
+static void CheckMenuItemB( HMENU hMenu, UINT uMenuId, bool fCheck )
+{
+	UINT uMenuFlags = (UINT)( MF_BYCOMMAND | (fCheck ? MFS_CHECKED : MFS_UNCHECKED) );
+	CheckMenuItem( hMenu, uMenuId, uMenuFlags );
+}
+
+static bool CheckMenuItemI( HMENU hMenu, UINT uMenuId, const TCHAR * strKey, const TCHAR * strIniPath )
+{
+	bool fCheck = !! GetPrivateProfileInt( TEXT("Options"), strKey, 0, strIniPath );
+	CheckMenuItemB( hMenu, uMenuId, fCheck );
+	return fCheck;
+}

@@ -283,16 +283,17 @@
 				FavorSizeOrSpeed="0"
 				OmitFramePointers="true"
 				WholeProgramOptimization="false"
-				PreprocessorDefinitions="WIN32;_DEBUG;DEBUG;_WINDOWS;UNICODE;DPSAPI_VERSION=1;_WIN32_WINNT=0x0500"
+				PreprocessorDefinitions="WIN32;_DEBUG=1;DEBUG;_WINDOWS;UNICODE;DPSAPI_VERSION=1;_WIN32_WINNT=0x0500"
 				StringPooling="true"
 				MinimalRebuild="true"
 				ExceptionHandling="0"
 				BasicRuntimeChecks="3"
 				SmallerTypeCheck="true"
 				RuntimeLibrary="1"
-				BufferSecurityCheck="false"
+				BufferSecurityCheck="true"
 				EnableFunctionLevelLinking="true"
 				FloatingPointModel="2"
+				FloatingPointExceptions="false"
 				RuntimeTypeInfo="false"
 				PrecompiledHeaderFile=".\Debug/BES.pch"
 				AssemblerListingLocation=".\Debug/"
@@ -401,13 +402,13 @@
 				EnableIntrinsicFunctions="true"
 				FavorSizeOrSpeed="1"
 				OmitFramePointers="true"
-				WholeProgramOptimization="true"
+				WholeProgramOptimization="false"
 				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;UNICODE;DPSAPI_VERSION=1;_WIN32_WINNT=0x0500;"
 				StringPooling="true"
 				ExceptionHandling="0"
 				BasicRuntimeChecks="0"
 				RuntimeLibrary="0"
-				BufferSecurityCheck="false"
+				BufferSecurityCheck="true"
 				EnableFunctionLevelLinking="false"
 				EnableEnhancedInstructionSet="2"
 				FloatingPointModel="2"
@@ -448,6 +449,7 @@
 				LargeAddressAware="2"
 				OptimizeReferences="2"
 				EnableCOMDATFolding="2"
+				LinkTimeCodeGeneration="0"
 				SetChecksum="true"
 				RandomizedBaseAddress="0"
 				DataExecutionPrevention="0"
@@ -998,10 +1000,6 @@
 			</File>
 			<File
 				RelativePath="resource.h"
-				>
-			</File>
-			<File
-				RelativePath=".\strings.ascii.h"
 				>
 			</File>
 			<File

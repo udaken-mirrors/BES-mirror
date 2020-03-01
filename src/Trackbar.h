@@ -1,26 +1,10 @@
 /* 
- *	Copyright (C) 2005-2008 mion
+ *	Copyright (C) 2005-2014 mion
  *	http://mion.faireal.net
- *
  *  This Program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2, or (at your option)
- *  any later version.
- *   
- *  This Program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- *  GNU General Public License for more details.
- *   
- *  You should have received a copy of the GNU General Public License
- *  along with GNU Make; see the file COPYING.  If not, write to
- *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA. 
- *  http://www.gnu.org/copyleft/gpl.html
- *
+ *  it under the terms of the GNU General Public License.
  */
 
-
-// from marybell.h
 #ifdef STRICT
 #define WNDPROC_FARPROC WNDPROC
 #else
@@ -48,7 +32,7 @@ static WNDPROC_FARPROC PrevTrackbarProc[ 3 ];
 
 LRESULT TB_OnMouseWheel( HWND hTrack, WPARAM wParam )
 {
-	const int delta = ( GET_WHEEL_DELTA_WPARAM( wParam ) <= 0 )? +1 : -1 ;
+	const int delta = ( GET_WHEEL_DELTA_WPARAM( wParam ) <= 0 ) ? +1 : -1 ;
 	const int iMax = (int) SendMessage( hTrack, TBM_GETRANGEMAX, 0, 0 );
 	const int iMin = (int) SendMessage( hTrack, TBM_GETRANGEMIN, 0, 0 );
 	int iPos = (int) SendMessage( hTrack, TBM_GETPOS, 0, 0 );
@@ -62,16 +46,21 @@ LRESULT TB_OnMouseWheel( HWND hTrack, WPARAM wParam )
 		// means "scroll forward" (positive)
 		// and "scroll up" means "scroll back" (negative)
 		SendMessage( GetParent( hTrack ), WM_HSCROLL,
-			MAKEWPARAM( ( delta==+1? TB_LINEDOWN : TB_LINEUP ), 0 ),
-			(LPARAM) hTrack );
+						(WPARAM)( 0 < delta ? TB_LINEDOWN : TB_LINEUP ),
+						(LPARAM) hTrack );
+		SendMessage( GetParent( hTrack ), WM_HSCROLL, TB_ENDTRACK, (LPARAM) hTrack );
 	}
 	return (LRESULT) FALSE;
 }
 
+bool TB_OnLButtonDown( HWND hTB );
 static LRESULT CALLBACK TrackbarSubProc0( HWND hTrack,
 								  UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
 	if( uMessage == WM_MOUSEWHEEL ) return TB_OnMouseWheel( hTrack, wParam );
+	else if( uMessage == WM_LBUTTONDOWN && TB_OnLButtonDown( hTrack ) ) return TRUE;
+	else if( uMessage == WM_KILLFOCUS )
+		SendMessage( GetParent( hTrack ), WM_USER_REFRESH, 0, WM_KILLFOCUS );
 	
 	return CallWindowProc( PrevTrackbarProc[ 0 ], hTrack, uMessage, wParam, lParam );
 }
@@ -79,12 +68,20 @@ static LRESULT CALLBACK TrackbarSubProc1( HWND hTrack,
 								  UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
 	if( uMessage == WM_MOUSEWHEEL ) return TB_OnMouseWheel( hTrack, wParam );
+	else if( uMessage == WM_LBUTTONDOWN && TB_OnLButtonDown( hTrack ) ) return TRUE;
+	else if( uMessage == WM_KILLFOCUS )
+		SendMessage( GetParent( hTrack ), WM_USER_REFRESH, 1, WM_KILLFOCUS );
+
 	return CallWindowProc( PrevTrackbarProc[ 1 ], hTrack, uMessage, wParam, lParam );
 }
 static LRESULT CALLBACK TrackbarSubProc2( HWND hTrack,
 								  UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
 	if( uMessage == WM_MOUSEWHEEL ) return TB_OnMouseWheel( hTrack, wParam );
+	else if( uMessage == WM_LBUTTONDOWN && TB_OnLButtonDown( hTrack ) ) return TRUE;
+	else if( uMessage == WM_KILLFOCUS )
+		SendMessage( GetParent( hTrack ), WM_USER_REFRESH, 2, WM_KILLFOCUS );
+
 	return CallWindowProc( PrevTrackbarProc[ 2 ], hTrack, uMessage, wParam, lParam );
 }
 

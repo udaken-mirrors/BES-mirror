@@ -764,6 +764,7 @@ http://support.microsoft.com/kb/131065
 - Fixed with a macro, Tcscpy_s.
 - This might have been related to my memo "IFF not saved unless exited immediately?"
 - Also backported to 1.6.2.
+- Cf. 20140315.
 
 2014-03-07 (1.7test2 [v1.7.0.2])
 [MOD] Faster IsProcessBES handling. (still to do***)
@@ -772,7 +773,7 @@ http://support.microsoft.com/kb/131065
   it used only the first 15 cch, if cch of exe name is >=19.  This is because of
   some limitation of non-Unicode, but basically, this can be changed so that both builds
   work more or less similarly.
-- 5 ANSIFIXes: 2 in watch.cpp; 1 in hack.cpp; 2 in list.cpp.
+- 5 ANSIFIXes: 2 in watch.cpp; 1 in hack.cpp; 2 in list.cpp. (Cf 20140322)
 - 20140309: additional 2 fixes: ANSIFIX6/7 in ini.cpp.
 - This change is not backported to 1.6.2, since the old behavior is not a bug either.
 - As of 1.6.1, ANSI build is not included anyway. Older ver. like 1.5.2 ANSI has the same pb.
@@ -870,5 +871,503 @@ http://support.microsoft.com/kb/131065
 [MOD] Target Dlg: _init_DialogPos, _init_ListView; tweaked.
 
 2014-03-15 1.6.2 & 1.7.0[.3]-alpha Released.
+-------------
 
+2014-03-15 (1.7.0.4)
+[MOD] Multiwatch: don't call PathToProcessID if all slots are used already.
+[FIX] Multiwatch: bug where a manually unlimited target may be auto-relimited.
+- Not yet really fixed. Cf. 2014-03-27.
+[MOD] xList: minor clean up.
+(!)[FIX] list.cpp: the 5 fixes on 20140306 were buggy in 1.7.0 (but ok in 1.6.2).
+- In the following, g_numOfFriends-- should have been --g_numOfFriends.  If
+  g_numOfFriends is 256, we'll be writing into array[256], while the array
+  is only valid up to array[255].
+	for( ptrdiff_t i = 0; i < g_numOfFriends; ++i )
+	{
+		if( Lstrcmpi( ti[ index ].szExe, g_lpszFriend[ i ] ) == 0 )
+		{
+			Tcscpy_s( g_lpszFriend[ i ], MAX_PATH * 2, g_lpszFriend[ g_numOfFriends - 1 ] );
+			*g_lpszFriend[ g_numOfFriends-- ] = _T('\0');
+		}
+	}
+- However, this situation is unlikely, since BES stores only up to array[199] on exit.
+The bug may be triggered eg if you have 200 friends and 56 new friends are added in
+one session, and a friend becomes an enemy.
+[MOD] Rename: MAX_PROCESS_CNT -> MAX_ENEMY_CNT==MAX_FRIEND_CNT
 
+2014-03-16
+[MOD] About box: use DEFAULT_QUALITY for the url text.
+[MOD] PathToProcessID: cleaup.
+
+2014-03-17 (1.7.0.5/1.6.3)
+(!)[FIX] Hack: don't unwatch just because there is an error (2 places).
+- Unwatch only if iMyId is 2, and only if the target is still there.
+ I.e. "target missing" is not a valid reason to unwatch.
+- Fix also in 1.6.3.
+(!)[FIX] Possibly suspended threads are not resumed on unlimit, if limited 100%.
+- Though unlikely.
+- Also fixed in 1.6.3.
+- Superseded by the fix @20140318.
+[FIX] Cosmetic: "Target #%d [ %s ] %c" may show a stale cache of g_Slider[i].
+- When you adjust a slider, % is immediately updated; but after that a stale value
+ may have been shown once again before the cache was sync'ed.
+- This is harmless but ugly and confusing; though the shown cached value was
+  actually the accurate, current percentage--% can't be updated real-time anyway.
+- Also fixed in 1.6.3.
+[NEW] TB_OnLButtonDown: click tick -> exact % etc.
+[FIX] Don't restore dwOldPriority unless SetPriorityClass is called.
+- Priority may change e.g. via Task Maneger; BES should not restore the
+ old priority, unless BES itself changes the priority.
+[MOD] Hack_Worker: a little cleanup.
+
+2014-03-18 (1.7.0.6/1.6.3)
+[MOD] Hack_Worker: more cleanup.
+[MOD] No sstp anymore.
+[FIX] About box: IDC_DESCRIPTION editbox too small.
+- Fixed also in 1.6.3.
+[MOD] Remove Ukagaka things & Anti-ukagaka things.
+(!)[FIX] Target process may be frozen in rare conditions.
+- If limited 100%, the inner loop breaks as fSuspended=true, which is
+ not resumed if the outer loop breaks without going into the inner
+ loop again.
+- Superseding the fix @20140317.
+- Fixed also in 1.6.3.
+
+2014-03-19 (1.7.0.7)
+//[MOD] Hack Thread: TIME_CRITICAL->ABOVE_NORMAL.
+(!)[FIX] UpdateProcessSnap: s_lpCPUTime[ cx ].pid OOB read (v1.7.0).
+- Probably not crashy; just possibly reading rgStruct[cx] when
+ rgStruct[cx-1] is the last valid element.
+(*)[NEW] ReconThread. AllocThreadList.
+- About 25% faster than before.
+- More importantly, now the sorted_paris cache is shared by all slots.
+ This should reduce the CPU load when BES is limiting several targets.
+
+2014-03-20 (1.7.0.7)
+[MOD] _tfopen_s to _tfsopen.##
+- 2014-04-02 Ported to v1.6.3.
+[MOD] Recon: be lazy if no one is listening.
+[NEW] PathToProcessID_Cached.
+- In itself, faster than PathToProcessID by ~10%, but it costs more in total
+ if you have to refresh the cache.  However, the refreshed cache is shared.
+
+2014-03-21 (1.7.0.8)
+[NEW] 15 "limit" slots (+ still only one "watch" slot).
+[FIX] NOTIFYICONDATA should be updated on TB_ENDTRACK.
+
+2014-03-21 (1.6.3/1.7.0.9)
+(!)[FIX] Exit_CommandFromTaskbar: ni.cbSize was wrong.
+- Harmless in reality at least on WinXP.
+- Fixed also in 1.6.3.
+[MOD] Get rid of GetShell32Version.
+[MOD] InitNotifyIconData: tweaked and cleaned up.
+[FIX] Tray Icon: "&Restore BES" is wrongly disabled in some cases.
+- Because of the "Not visible, but not Iconized" situation.
+- Fixed also in 1.6.3.
+[MOD] Boss Key: use SW_SHOWMINIMIZED instead of direct SW_HIDE.
+[FIX] NOTIFYICON: handle WM_CONTEXTMENU; also use NIM_SETFOCUS properly.
+[NEW] Tray Icon Menu: add IDM_MINIMIZE when appropriate.
+[MOD] Get rid of g_szTarget.
+[MOD] Settings-Slider: update ini on KillFocus.
+[FIX] In 1.7.0.8 idle-watch was seen as active.
+***[FIX] Crashy bug in 1.7.0.8 on WM_USER_STOP.
+- OOB write into status text.
+(!)[FIX] hChildThread may memory-leak on WM_USER_STOP.
+- But only when sema wait failed (unusual).
+- Fixed also in 1.6.3.
+
+2014-03-22 (1.7.0.9)
+[FIX] IDM_SHOWWINDOW broken yesterday.
+[MOD] InitMenu*: clean up. EXE ~1.5 KiB smaller.
+[MOD] Boss-key & IDM_MINIMIZE: close child dialog boxes.
+***[FIX] (1.7.0.8) Possible double-limit in multi-watch.
+- In yesterday's version, when slot 2 becomes free, a target in slot 3+
+ will be re-limited in slot 2, without unlimited first.
+ 
+2014-03-22 (1.7.0.10)
+[NEW] List Dialog: Shortcut keys Ctrl+1...7 to change sort_algo.  ##todo help
+(*)[MOD] Max 30 slots.  WM_PAINT tweaked to show a long "Limiting" line.
+[MOD] Get rid of per-instance HACK_PARAMS::lpszStatus[16].
+- Instead, use one global array, ppszStatus[16].
+[MOD] Make Status/ToolTips buffer smaller. (Cf 20140402)
+[MOD] Get rid of HACK_PARAMS.
+[FIX] More (6th/7th) ANSIFIX under WM_COPYDATA. Cf 20140307.
+
+2014-03-23 (1.6.3/1.7.0.10)
+[MOD] TARGETINFO -> TARGETINFO and PROCESSINFO.
+[NEW] Now, pre-start watch is possible also when slot2 is used.
+[MOD] Target List is re-focused on reload.
+[MOD] SetProcessInfoMsg: show Slot ID.
+[MOD] Get rid of TARGETINFO::szExe.
+[FIX] Tray tool tip: If active, Watching-Idle is shown like Limiting.
+- If BES is active with other slots.
+- Fixed also in 1.6.3.
+
+2014-03-23 (1.7.0.11)
+[MOD] SetTargetPlus does not set g_bHack[2].
+- In older versions, g_bHack[2] is set TRUE when watching-idle starts,
+ and it's set FALSE if the target is limited-then-missing.
+ To be consistent, it should be always FALSE when slot 2 is not
+ limiting anything.
+[NEW] Handle both [B] and [M] as the boss key.
+[MOD] Target Dialog: &Unknown->U&nknown, Unli&mit All->&Unlimit All.
+- Reverted on 2014-04-04.
+[NEW] TARGETINFO::pExe.
+[MOD] PROCESSINFO::szExe -> pExe.
+[MOD] Misc cleanup: eg in IsAbsFoe2. 
+- In total, 3% faster than 1.7.0.10.
+
+2014-03-24 (1.7.0.11)
+[MOD] SendNotifyIconData: cleanup.
+[MOD] CachedList_Refresh: reuse the old memory block if possible.
+
+2014-03-24 (1.6.3/1.7.0.12)
+(!)(!)[FIX] Infinite loop if BES is targeted via WM_COPYDATA.
+- A bug in 1.6.0.
+- Fixed also in 1.6.3.
+[FIX] Pre-watch and limit of another BES was possible.
+- Fixed also in 1.6.3.
+[FIX] LimitPlus: redundant ReleaseSemaphore in EXIT_THREAD.
+- Fixed also in 1.6.3.
+[FIX] LimitPlus: Reset g_bHack[ 3 ] before UpdateStatus().
+- Fixed also in 1.6.3.
+[FIX] IsProcessBES: don't assume the max number of threads.
+- Since 2014-03-22, BES may have a lot of threads.
+- (1.6.3) max 32->256 just in case. (March 28: make it 512.)
+***[FIX] BES_COPYDATA_COMMAND_PARSE: don't use slot2 if already used.
+- Bug in 1.7.0.9-11.
+
+2014-03-25 (1.6.3/1.7.0.12)
+[FIX] ShowCommandLineHelp: no MB_TOPMOST if hWnd is not NULL.
+- Fixed also in 1.6.3.
+[NEW] Command line: support "--version".
+- Also in 1.6.3.
+[FIX] Enable [Control] button and Slider3, if watching idly.
+- Fixed also in 1.6.3.
+
+2014-03-26 (1.7.0.13)
+[MOD] IsProcessBES in UpdateProcessSnap: slightly optimized.
+[NEW] Target Dlg: Add "Slot" column.
+- Now 2-3% slower than 1.7.0.12.
+[MOD] Get rid of MetaIndex.
+[MOD] Target Dlg: sort by pointer.
+- Slightly (~1%) faster; still ~1% slower than 1.7.0.12.
+- Cf. 2014-03-29.
+[MOD] Get rid of LV_OnSelChange on WM_USER_REFRESH.
+- The call was redundant b/c OnSelChange is called on WM_NOTIFY.
+- Now 5% faster than 1.7.0.12.
+
+2014-03-27 (1.6.3/1.7.0.14)
+[FIX] Handle the return value (SIZE_T)-1 from HeapSize on error.
+[MOD] UpdateProcessSnap: count PIDs first; no more realloc.
+***This is good in itself, but the udpate was buggy. Cf 20140401.
+[MOD] UpdateProcessSnap: better s_lpCPUTime handling.
+- Get rid of PROCESSINFO::CPUTime.
+- Possibly 0.5~1.0% faster than 1.7.0.13.
+[FIX] (1.7.0.13) Do slot-sort by PID when slotid's are the same.
+[FIX] PathToExe_InPlace (ex: PathToExe): result can be "".
+- Fixed also in 1.6.3.
+[FIX] Multiwatch: respect fUnlimit.
+- Basically, fixed properly now. Cf. 2014-03-15.
+- Also, fUnlimit is reset on IDM_UNWATCH.
+[MOD] MAX_SLOTS 256. Status message tweaked.
+
+2014-03-28 (1.6.3/1.7.0.14)
+[MOD] TARGETINFO::szPath: array->pointer.
+- Using only 25-97% of memory that old versions use.
+[MOD] PROCESSINFO::szPath: array->pointer.
+(!)[FIX] WM_USER_STOP may be called twice for the same slot.
+- This is a race condition, where you do IDM_STOP almost at the
+ same time as an error like Target Missing.  When the worker
+ thread detects an error, it posts WM_USER_STOP; but the user
+ can also generate another WM_USER_STOP via IDM_STOP.  Then,
+ the 1st WM_USER_STOP will close the child-thread handle and set
+ it NULL; the 2nd WM_USER_STOP will do GetExitCodeThread with
+ that already-closed handle.
+- Fixed also in 1.6.3.
+[MOD] IDM_STOP: don't stop one thread at a time.
+- Don't stop each thread one by one by sending WM_USER_STOP.
+ This way, it takes some time to return from SendMessage,
+ b/c a thread stops only on WM_USER_STOP.  Instead,
+ quick-stop every thread first with g_bHack flags, and then send
+ WM_USER_STOP for each stopped thread. Should be more efficient.
+[MOD] PROCESSINFO::szText: array to pointer.
+[NOTE] One crash on init.
+- "Faulting application bes.exe, version 1.7.0.14, faulting module
+   ntdll.dll, version 5.1.2600.6055, fault address 0x00029f07."
+- Possibly logging race condition, but I'm not sure what's wrong.
+ Looks like it crashed even before logging started.
+
+2014-03-28 (1.6.3/1.7.0.15)
+[MOD] g_lpszEnemy/Friend: static->dynamically allocated.
+(!)[FIX] ReadIni: typos g_lpszEnemy->g_lpszFriend (2 places).
+- Almost harmless, but a full-path friend name can be loaded,
+ when a file title is expected.
+- Also fixed in 1.6.3.
+[MOD] MAX_SLOTS 256 to 400.
+[FIX] Multiwatch: respect fUnlimit more (cf 20140327).
+
+2014-03-29 (1.7.0.15)
+[MOD] WriteDebugLog: cleanup.
+
+2014-03-29 (1.7.0.16)
+[MOD] WriteDebugLog: use CreateFile.
+[MOD] xList: Sort by item itself again. Cf. 2014-03-26.
+- Now sizeof item is only 32 bytes.  Sorting by pointer is not
+ significantly better, perhaps worse even.
+[MOD] Use g_dwTargetProcessId less.
+[FIX] Settings Dlg: don't disable a focused control.
+- Won't fix in 1.6.3, as it's not a big problem.
+
+2014-03-30 (1.7.0.16)
+[MOD] Get rid of the hot[] array (Cf. 2014-03-08)
+[MOD] Get rid of g_dwTargetProcessId.
+[FIX] Handle Pre-watch for already-limited-as-#2.
+- This is not supported at all in v1.7.0.
+- In 1.7.0.15, ex-#2 is relocated; was ok but strange.
+
+2014-03-30 (1.7.0.17)
+[MOD] Everyone calls GetLongPathName before SetTargetPlus.
+- Thus, no more GetLongPathName in PathToProcessID(_Cached).
+[MOD] WM_COPYDATA: use _Cached version of PathToProcessID.
+(!)[FIX] Hack: don't use PathToProcessID for "missing?" test.
+- Instead, use ProcessExists(dwPID).
+- It's possible that Hack fails because the process is
+ missing but there is still another instance of the same exe;
+ if that happens the (PathToProcessID!=-1) test is misleading.
+ That is, Watch is canceled for the wrong reason.
+- Good news is, this problem happens only in an unusual
+ situation (mainly on Initial OpenProcess error).
+[NEW] Watch: support one wild card (*) in the target path.
+- Supported thru PathToProcessID_Cached.
+*** While working on this, a big bug was created.
+ See 2014-04-01.
+
+2014-03-31 (1.7.0.17)
+[NEW] Accept % with a wildcarded path (starSlider).
+[MOD] Non-cached PathToProcessID supports a wildcard too.
+[MOD] ParseArgs returns -1 instead of 0, when % is not set.
+[NEW] Detect Ctrl+NumLock+Num3.
+[MOD] Wildcard: don't match Windows Directory.
+[MOD] Wildcard: ignore one character "*" (match anything).
+[MOD] ParseArgs: refuse any one-letter target.
+(!)[FIX] Watch: if "relocate", copy g_Slider[2] too.
+- This is a bug in v1.7.0.
+
+2014-03-31 (1.7.0.18)
+[MOD] Watch: always exclude PID if bHack or fUnlimited.
+[MOD] PathToProcessID*: use PATHINFO array instead of szPath.
+- Preparing to handle multi-path watching.
+[FIX] ListView: workaround for LVHT_NOWHERE.
+[NEW] Multi-path watch: "--add" or "-a".
+- Up to 4 paths for now.
+[MOD] Always use a starSlider to pre-watch.
+[FIX] One more AnsiFix in ParseArgs.
+[NEW] Accept Short Path w/ wildcard.
+- e.g. "C:\progra~1\*\firefox.exe".
+
+2014-04-01 (1.7.0.18)
+[MOD] WM_COPYDATA: PathToProcessID_Cached -> PathToProcessIDs.
+- This should be more efficient.
+[MOD] WM_COPYDATA: some optimiz.
+[NEW] Can update Watch list via commandline.
+- e.g. the slider value of an existing watchee.
+[MOD] ParseArgs: minor optimiz.
+
+***CRASH 2014-04-01T08:19:47Z
+- "Faulting application bes.exe, version 1.7.0.18, faulting module ntdll.dll,
+  version 5.1.2600.6055, fault address 0x00010a1b."
+- My initial memo: "(log or race cond. avoid HeapSize)"
+
+2014-04-01 (1.7.0.19)
+***[FIX] (1.7.0.17/18) typo in TiCopyFrom:
+------------------------------------------------------------------------------------
+	ti.szPath = (TCHAR *) HeapAlloc( GetProcessHeap(), 0, cchMem * sizeof(TCHAR) );
+	if( ! ti.szPath ) return FALSE;
+	_tcscpy_s( ti.szPath, cchMem, ti0.szPath );
+	if( ti0.disp_path )
+	{
+		cchMem = _tcslen( ti0.disp_path ) + 1;
+		if( ti.disp_path ) HeapFree( GetProcessHeap(), 0, ti.disp_path );
+		ti.szPath = (TCHAR *) HeapAlloc( GetProcessHeap(), 0, cchMem * sizeof(TCHAR) ); // BAD
+		if( ! ti.disp_path ) return FALSE;
+		_tcscpy_s( ti.disp_path, cchMem, ti0.disp_path );
+	}
+------------------------------------------------------------------------------------
+- A typo in the BAD line: should have been "ti_disp_path =", caused
+ around 2014-03-30 17:00 UTC.
+- ti.szPath is distroyed, and the originally allocated memory block leaks.
+ ti.disp_path is not allocated, NULL or use-after-free.
+ Thus heap corruption; foobared.
+[FIX] Don't reassign ti[ slotid ].disp_path w/o first freeing it.
+[MOD] Allocate TARGETINFO::lpExe instead of just pointing &path[ofs].
+[FIX] (1.7.0.18) SelectWatch: slider ini is not used.
+[FIX] --add: update status esp. NotifyIcon tip.
+[MOD] starSlider -> PATHINFO::slider.
+[MOD] Ctrl+NumLock+Num3: release sema, close child handles.
+***[FIX] xList: reset cItems on WM_INITDIALOG/WM_DESTROY.
+- Stale cItems(=cPrevItems) was used, while only 64 items are allocated.
+ If # of processes is > 64, an OOB read (if-not-null-then-free style) was
+ triggered when the target dialog was opened next time.
+- Bug on 2014-03-27, in 1.7.0.14-18.
+
+2014-04-02 (1.7.0.19)
+[MOD] Hack_Worker: use local copy of lpPath/lpExe.
+[MOD] WM_USER_HACK: less flicker (use flag 0x80000).
+
+2014-04-02 (1.7.0.20)
+[FIX] LimitPlus: ppszStatus[*]: possible buffer overflow.
+- Use SetLongStatusText instead of _tcscpy_s.
+- Bug in 2014-03-22 (1.7.0.10) till 1.7.0.19.
+[MOD] AdjustLength: optimized as SetLongStatusText.
+
+2014-04-03 (1.7.0.20)
+[MOD] xList: SetProcessInfoMsg: less flicker.
+(!)[FIX] DrawSkin: draw a black rect if !hMemDC.
+- Also fixed in 1.6.3.
+[FIX] Handle errors in ChangeSkin.
+- Also fixed in 1.6.3.
+(!)[MOD] Select a skin-size bitmap, not a max possible size.
+- Backported to 1.6.3 @20140406
+
+2014-04-03 (1.7.0.21)
+[NEW] FindPIDs: get a target-PID array in one go.
+- This should be more efficient.
+- FindPIDs does not use pair_list (cached or not).
+[MOD] Get rid of TARGETINFO::lpExe.
+
+2014-04-04 (1.7.0.21)
+[NEW] TARGETINFO::_hSync and fSync.
+[MOD] Always fWatchMulfi (IDM_WATCH_MULTI).
+- No more optional.
+[MOD] IsProcessBES: accept "full" sorted_pairs.
+[FIX] _bes_lower: escape '[' and ']'.
+[MOD] xList: remove List All/Unlimit All/Refresh buttons.
+- See 2014-05-29.
+
+2014-04-05 (1.7.0.21)
+[MOD] (_)toggle_opt_menu_item has nIfEnabled.
+- IDM_ALWAYS_LISTALL is now 2, no more 1, in INI.
+
+2014-04-05 (1.7.0.22)
+[FIX] UpdateProcessSnap: Memory leak if !fListAll.
+- Bug in 1.7.0.14-21.
+
+2014-04-06 (1.6.3/1.7.0.22)
+[MOD] Skin: use CanvasSize.
+[MOD] (1.6.3) Skin updates backported. ##todo clean
+
+2014-04-09 (1.6.3/1.7.0.23)
+[MOD] Skin: minor optimiz.
+
+2014-04-11 (1.7.0.23)
+[FIX] Memory leak in _bes_init.
+
+2014-04-11 (1.6.3/1.7.0.24)
+[FIX] AdjustTokenPrivileges may fail w/ too small buffer.
+- In theory, at least.
+- Fixed in 1.6.3 too.
+
+2014-04-15 (1.6.3/1.7.0.24)
+[FIX] Better non-96 DPI support.
+- hFontItalic and GetFontForURL scaled.
+- UrlHitTest: use GetTextExtentPoint32.
+- 20140415: ported to 1.6.3.
+
+2014-04-16 (1.7.0.25)
+[MOD] About box: smaller font size for URL.
+
+2014-05-14 (1.7.0.25)
+[FIX] Better VC6 compat (don't cast ULONGLONG to double).
+
+2014-05-29 (1.7.0.25)
+[FIX] On WM_MOVE: don't call SetWindowPosIni if Iconic.
+- This was correct in 1.6.x.  Broken in 1.7.0.9.
+[MOD] xList: restore List All/Unlimit All/Refresh buttons.
+- See 2014-04-04.
+
+2015-10-22 (1.7.0.26)
+[NEW] --hide and --reshow.
+
+2015-11-26 (1.7.0.26+)
+[NEW] --first: don't talk to other BES. --second: sleep one second before starting.
+
+2015-11-27
+[MOD] bAllowMulti=0 if --add or -a.
+
+2015-12-03 (1.7.0.27)
+[NEW] WM_CREATE understands -J or --job-list.
+[MOD] Renamed --first to --selfish, --second to --delay or -D.
+[NEW] -x is also short for --exitnow (along with -e).
+[MOD] Re-enabled the fSafe check in PathEqual.
+
+2015-12-04
+[FIX] Clear g_arPathInfo if !CreateThread for LimitPlus.
+[NEW] WM_COPYDATA handles JobList.
+[NEW] TargetList supports multiple-watch, more or less.
+
+2015-12-12 (1.7.1)
+(No changes)
+
+2015-12-12 (1.7.1.1)
+[FIX] HandleJobList: init first_job as 0 not -1.
+[MOD] AdjustDebugPrivilege (WAS: SetDebugPrivilege) returns error code.
+[NEW] MENUITEM "Lower &Privilege", IDM_LOWER_PRIVILEGE
+[MOD] Removed MENUITEM "&Watch Multiple Instances", IDM_WATCH_MULTI
+[NEW] CheckMenuItemB/I.
+
+2015-12-13
+[FIX] Double free in HandleJobList.
+
+2016-09-23 (1.7.2)
+[MOD] Can unlimit #3 on Control, while watching.
+
+2016-11-01 (1.7.3-test1)
+[NEW] Per-process Sleep/Awake Cycle and Initial Delay set/updated via command line.
+- e.g. "bes target.exe 30;40;20000" would be -30% with Cycle=40ms, Delay=20000ms.
+- Based on Gijs van der Velden's suggestions on 2016-10-29.
+- A job list is not yet supported, but one can --add a new target (without --allow-multi).
+
+2016-11-02 (1.7.3-test2)
+[NEW] A job list with 30;40;5000 style params is supported.
+
+2016-11-08
+[MOD] Unimportant: removed some unused code in LimitPlus.
+
+2016-12-06 (1.7.4)
+- No changes.
+
+2017-01-17 (1.7.5-test1)
+[NEW] Basic support of -pid (limit, unlimit, change %).
+- LimitProcess; PIDToPath_Alloc; LimitPID
+
+2017-01-20 (1.7.5-test2)
+[MOD] Syntax: bes "pid:1234" 30;40;50
+- Now, per-target cycle/delay are supported.
+[NEW] Syntax: bes -J "pid:1234" 30;40;50 "pid:5678" 40;50;60
+
+2017-01-22 (1.7.5-test3)
+[MOD] ParsePID: Handle a bad input (overflow etc.)
+
+2017-01-23 (1.7.5-test4)
+[MOD] Minor cleanups.
+
+2017-03-15 (1.7.5)
+[MOD] updated command-line help
+
+2017-11-04 (1.7.7-test1)
+[NEW] MAX_WATCH = 8 from 4
+[FIX] Disable the Watch button, if not watchable.
+
+2017-11-04 (1.7.7-test2)
+[FIX] Watch List: show the def. val. when delay=0.
+
+2017-11-05 (1.7.7-test2)
+[FIX] A watched-target is (re)watchable. (FIX to 2017-11-04)
+[FIX] Don't disable IDM_WATCH anymore just because the watch table is non-empty.
+
+2017-11-06 (1.7.7-test2)
+[MOD] AboutShortcuts shows [L] (Show the Watch List).
+
+2017-12-01 (1.7.7)
+[MOD] Added HEAP_ZERO_MEMORY in HeapAlloc, just in case.

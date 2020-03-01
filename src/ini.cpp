@@ -1,21 +1,31 @@
+/* 
+ *	Copyright (C) 2005-2014 mion
+ *	http://mion.faireal.net
+ *  This Program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License.
+ */
+
 #include "BattleEnc.h"
 
 extern BOOL g_bSelNextOnHide;
 
 extern BOOL g_bLogging;
 
-extern volatile int g_Slider[ 4 ];
+extern volatile int g_Slider[ MAX_SLOTS ];
 
-extern TCHAR g_lpszEnemy[ MAX_PROCESS_CNT ][ MAX_PATH * 2 ];
-extern int g_numOfEnemies;
-extern TCHAR g_lpszFriend[ MAX_PROCESS_CNT ][ MAX_PATH * 2 ];
-extern int g_numOfFriends;
+extern TCHAR * g_lpszEnemy[ MAX_ENEMY_CNT ];
+extern ptrdiff_t g_numOfEnemies;
+extern TCHAR * g_lpszFriend[ MAX_FRIEND_CNT ];
+extern ptrdiff_t g_numOfFriends;
 extern volatile UINT g_uUnit;
+extern bool g_fRealTime;
+extern bool g_fLowerPriv;
 
 
 static void WriteIni_Worker( TCHAR * lpBuffer, size_t cchBuffer, 
 							bool fFriend, const TCHAR * strIniPath );
-
+static void PathToExe_InPlace( TCHAR * pszPath );
+static BOOL PathToExeEx( LPTSTR strPath, int iBufferSize );
 
 const TCHAR * GetIniPath( void )
 {
@@ -117,20 +127,16 @@ const TCHAR * GetIniPath( void )
 
 
 
-BOOL ReadIni( BOOL * pbAllowMulti )
+void ReadIni( BOOL& bAllowMulti, BOOL& bLogging )
 {
 	const TCHAR * strIniPath = GetIniPath();
 
-	g_bLogging = !! GetPrivateProfileInt( TEXT( "Options" ), TEXT( "Logging" ), FALSE, strIniPath );
-	EnableLoggingIni( g_bLogging );
-
-	if( pbAllowMulti )
-	{
-		*pbAllowMulti = !! GetPrivateProfileInt( TEXT( "Options" ), TEXT( "AllowMulti" ), FALSE, strIniPath );
-	}
+	bLogging = !! GetPrivateProfileInt( TEXT( "Options" ), TEXT( "Logging" ), FALSE, strIniPath );
+	bAllowMulti = !! GetPrivateProfileInt( TEXT( "Options" ), TEXT( "AllowMulti" ), FALSE, strIniPath );
+	g_fRealTime = !! GetPrivateProfileInt( TEXT("Options"), TEXT("RealTime"), FALSE, GetIniPath() );
+	g_fLowerPriv = !! GetPrivateProfileInt( TEXT("Options"), TEXT("LowerPriv"), FALSE, GetIniPath() );
 
 	g_bSelNextOnHide = !! GetPrivateProfileInt( TEXT( "Options" ), TEXT( "SelChange" ), FALSE, strIniPath );
-
 	const UINT unit
 		= GetPrivateProfileInt( TEXT( "Options" ), TEXT( "Unit" ), UNIT_DEF, strIniPath );
 	if( UNIT_MIN <= unit && unit <= UNIT_MAX ) g_uUnit = unit;
@@ -142,7 +148,6 @@ BOOL ReadIni( BOOL * pbAllowMulti )
 //0x02 	SUBLANG_CHINESE_SIMPLIFIED 	Chinese (Simplified)
 //	WORD wDefLanguage = (WORD) PRIMARYLANGID( GetSystemDefaultLangID() );
 	WORD wDefLanguage = (WORD) PRIMARYLANGID( GetUserDefaultLangID() );
-	
 
 	if( wDefLanguage == LANG_CHINESE )
 	{
@@ -170,89 +175,79 @@ BOOL ReadIni( BOOL * pbAllowMulti )
 	g_Slider[ 1 ] = SLIDER_DEF;
 	g_Slider[ 2 ] = SLIDER_DEF;
 	g_Slider[ 3 ] = 0;
+	for( ptrdiff_t e = 4; e < MAX_SLOTS; ++e ) g_Slider[ e ] = SLIDER_DEF;
 
-	int i, j;
-	TCHAR lpszKey[ 100 ];
+	ptrdiff_t i, j;
+	TCHAR szKeyName[ 32 ];
+	TCHAR szBuffer[ CCHPATH ];
 	g_numOfEnemies = 0;
-	for( i = 0; i < MAX_PROCESS_CNT; ++i )
+	for( i = 0; i < MAX_ENEMY_CNT; ++i )
 	{
-		_stprintf_s( lpszKey, _countof(lpszKey), _T( "Enemy%d" ), i );
-		GetPrivateProfileString(
-			TEXT( "Enemy" ),
-			lpszKey,
-			TEXT(""),
-			g_lpszEnemy[ g_numOfEnemies ],
-			MAX_PATH * 2,
-			strIniPath
-		);
-		if( *g_lpszEnemy[ g_numOfEnemies ] == _T('\0') ) break;
-		else if( IsAbsFoe( g_lpszEnemy[ g_numOfEnemies ] ) ) continue;
-		else if( _tcschr( g_lpszEnemy[ g_numOfEnemies ], _T( '\\' ) ) != NULL ) continue;
+		_stprintf_s( szKeyName, _countof(szKeyName), _T("Enemy%d"), (int) i );
+		
+		if( ! GetPrivateProfileString( TEXT("Enemy"), szKeyName, NULL,
+										szBuffer, CCHPATH, strIniPath ) ) break;
+		
+		if( IsAbsFoe( szBuffer ) || _tcschr( szBuffer, _T('\\') )) continue;
 
-		PathToExeEx( g_lpszEnemy[ g_numOfEnemies ], MAX_PATH + 1 );
+		if( ! PathToExeEx( szBuffer, CCHPATH ) ) continue;
 
 		for( j = 0; j < g_numOfEnemies; ++j )
-		{
-			if( Lstrcmpi( g_lpszEnemy[ j ], g_lpszEnemy[ g_numOfEnemies ] ) == 0 ) goto NEXT_FOE;
-		}
+			if( _tcsicmp( g_lpszEnemy[ j ], szBuffer ) == 0 ) break; // dup
+		
+		if( j < g_numOfEnemies ) continue;
 
-		++g_numOfEnemies;
+		size_t cchMem = _tcslen( szBuffer ) + 1;
+		
+		g_lpszEnemy[ g_numOfEnemies ]
+			= (TCHAR *) HeapAlloc( GetProcessHeap(), 0, cchMem * sizeof(TCHAR) );
+		if( ! g_lpszEnemy[ g_numOfEnemies ] ) break;
 
-		if( g_numOfEnemies == MAX_PROCESS_CNT )//*
-			break;
+		_tcscpy_s( g_lpszEnemy[ g_numOfEnemies++ ], cchMem, szBuffer );
 
-		NEXT_FOE:
-		{
-			;
-		}
+		if( g_numOfEnemies == MAX_ENEMY_CNT ) break;
 	}
 
 	g_numOfFriends = 0;
-	for( i = 0; i < MAX_PROCESS_CNT; i++ )
+	for( i = 0; i < MAX_FRIEND_CNT; ++i )
 	{
-		_stprintf_s( lpszKey, _countof(lpszKey), _T( "Friend%d" ), i );
-		GetPrivateProfileString(
-			TEXT( "Friend" ),
-			lpszKey,
-			TEXT(""),
-			g_lpszFriend[ g_numOfFriends ],
-			MAX_PATH * 2,
-			strIniPath
-		);
-	
-		if( *g_lpszFriend[ g_numOfFriends ] == _T('\0') ) break;
-		else if( IsAbsFoe( g_lpszEnemy[ g_numOfFriends ] ) ) continue;
-		else if( _tcschr( g_lpszEnemy[ g_numOfFriends ], _T( '\\' ) ) != NULL ) continue;
-
-		PathToExeEx( g_lpszFriend[ g_numOfFriends ], MAX_PATH + 1 );
-
-		for( j = 0; j < g_numOfFriends; ++j )
-		{
-			if( Lstrcmpi( g_lpszFriend[ j ], g_lpszFriend[ g_numOfFriends ] ) == 0 ) goto NEXT_FRIEND;
-		}
+		_stprintf_s( szKeyName, _countof(szKeyName), _T("Friend%d"), (int) i );
 		
+		if( ! GetPrivateProfileString( TEXT("Friend"), szKeyName, NULL,
+										szBuffer, CCHPATH, strIniPath )) break;
+//		else if( IsAbsFoe( g_lpszEnemy[ g_numOfFriends ] ) ) continue;
+//		else if( _tcschr( g_lpszEnemy[ g_numOfFriends ], _T( '\\' ) ) != NULL ) continue;
+		// @20140328
+		else if( IsAbsFoe( szBuffer ) || _tcschr( szBuffer, _T('\\') ) ) continue;
+
+		if( ! PathToExeEx( szBuffer, CCHPATH ) ) continue;
+
+		// dup check
+		for( j = 0; j < g_numOfFriends; ++j )
+			if( _tcsicmp( g_lpszFriend[ j ], szBuffer ) == 0 ) break;
+		if( j < g_numOfFriends ) continue;
+		
+		// if an enemy AND a friend at the same time, consider it as an enemy
 		for( j = 0; j < g_numOfEnemies; ++j )
-		{
-			if( Lstrcmpi( g_lpszEnemy[ j ], g_lpszFriend[ g_numOfFriends ] ) == 0 ) goto NEXT_FRIEND;
-		}
+			if( _tcsicmp( g_lpszEnemy[ j ], szBuffer ) == 0 ) break;
+		if( j < g_numOfFriends ) continue;
 
-		++g_numOfFriends;
+		size_t cchMem = _tcslen( szBuffer ) + 1;
+		g_lpszFriend[ g_numOfFriends ]
+						= (TCHAR *) HeapAlloc( GetProcessHeap(), 0, cchMem * sizeof(TCHAR));
+		if( ! g_lpszFriend[ g_numOfFriends ] ) break;
 
-		if( g_numOfFriends == MAX_PROCESS_CNT )//*
-			break;
+		_tcscpy_s( g_lpszFriend[ g_numOfFriends++ ], cchMem, szBuffer );
 
-		NEXT_FRIEND:
-		{
-			;
-		}
+		if( g_numOfFriends == MAX_FRIEND_CNT ) break;
 	}
-	return TRUE;
+
 }
 
 BOOL WriteIni( bool fRealTime )
 {
 	// The maximum profile section size is 32,767 characters. Our cchBuffer is 133,120 cch.
-	const size_t cchBuffer = (size_t)( MAX_PATH * 2 ) * MAX_PROCESS_CNT;
+	const size_t cchBuffer = CCHPATH * MAX_ENEMY_CNT;
 	TCHAR * lpBuffer = (TCHAR*) HeapAlloc( GetProcessHeap(), 0L, cchBuffer * sizeof(TCHAR) );
 	if( ! lpBuffer )
 		return FALSE;
@@ -294,6 +289,7 @@ BOOL WriteIni( bool fRealTime )
 		WritePrivateProfileString( _T("Slider"), _T("Slider2"), _T("1520"), strIniPath );
 	}
 
+	// Read in ReadIni
 	WritePrivateProfileString(
 		TEXT( "Options" ), 
 		TEXT( "RealTime" ),
@@ -301,7 +297,7 @@ BOOL WriteIni( bool fRealTime )
 		strIniPath
 	);
 
-	TCHAR strUnit[ 32 ];
+	TCHAR strUnit[ 32 ]; // Read in ReadIni
 	_stprintf_s( strUnit, _countof(strUnit), _T( "%u" ), g_uUnit );
 	WritePrivateProfileString(
 		TEXT( "Options" ), 
@@ -310,7 +306,7 @@ BOOL WriteIni( bool fRealTime )
 		strIniPath
 	);
 
-	TCHAR lpszLangId[ 100 ];
+	TCHAR lpszLangId[ 100 ]; // Read in ReadIni
 	_stprintf_s( lpszLangId, _countof(lpszLangId), _T( "%d" ), (int) GetLanguage() );
 	WritePrivateProfileString(
 		TEXT( "Options" ), 
@@ -321,8 +317,22 @@ BOOL WriteIni( bool fRealTime )
 	
 	WriteIni_Worker( lpBuffer, cchBuffer, false, strIniPath );
 	WriteIni_Worker( lpBuffer, cchBuffer, true, strIniPath );
-
 	HeapFree( GetProcessHeap(), 0L, lpBuffer );
+
+	for( ptrdiff_t i = 0; i < MAX_ENEMY_CNT /*==MAX_FRIEND_CNT*/; ++i )
+	{
+		if( g_lpszEnemy[ i ] )
+		{
+			HeapFree( GetProcessHeap(), 0, g_lpszEnemy[ i ] );
+			g_lpszEnemy[ i ] = NULL;
+		}
+		
+		if( g_lpszFriend[ i ] )
+		{
+			HeapFree( GetProcessHeap(), 0, g_lpszFriend[ i ] );
+			g_lpszFriend[ i ] = NULL;
+		}
+	}
 	return TRUE;
 }
 
@@ -339,6 +349,10 @@ static void _bes_lower( const TCHAR * p, TCHAR * q, ptrdiff_t cchBuf )
 			*q = (TCHAR) _totlower( *p );
 		else if( *p == _T('=') ) // escape '=' as ':'
 			*q = _T(':');
+		else if( *p == _T('[') ) // escape '[' as '<' @20140404 v1.7.0.21
+			*q = _T('<');
+		else if( *p == _T(']') ) // escape ']' as '>' @20140404 v1.7.0.21
+			*q = _T('>');
 		else
 			*q = *p;
 
@@ -351,10 +365,18 @@ static void _bes_lower( const TCHAR * p, TCHAR * q, ptrdiff_t cchBuf )
 // v0.1.6.0 (20120427) : We only handle up to MAX_PROCESS_CNT (256) items.
 // Therefore, we should somehow forget about old friends/enemies.
 // So, we remember how old they are.
-void WriteIni_Time( const TCHAR * pExe )
+void WriteIni_Time( const TCHAR * pszPath )
 {
-	TCHAR strExeNameLower[ MAX_PATH * 2 ];
-	_bes_lower( pExe, strExeNameLower, MAX_PATH * 2 );
+	if( ! pszPath ) return;
+
+	const TCHAR * pExe = _tcsrchr( pszPath, _T('\\') );
+	if( pExe ) ++pExe;
+	else pExe = pszPath;
+
+	if( _tcschr( pExe, _T('*') ) || ! pExe[ 0 ] ) return;
+
+	TCHAR strExeNameLower[ CCHPATH ] = _T("");
+	_bes_lower( pExe, strExeNameLower, CCHPATH );
 
 	FILETIME ft = {0};
 	GetSystemTimeAsFileTime( &ft );
@@ -409,14 +431,16 @@ static void WriteIni_Worker( TCHAR * lpBuffer, size_t cchBuffer,
 							bool fFriend, const TCHAR * strIniPath )
 {
 	const TCHAR * strSection = fFriend ? _T("Friend") : _T("Enemy") ;
-	const TCHAR (*list)[ MAX_PATH * 2 ] = fFriend ? g_lpszFriend : g_lpszEnemy ;
+	//const TCHAR (*list)[ MAX_PATH * 2 ] = fFriend ? g_lpszFriend : g_lpszEnemy ;
+	const TCHAR * const * list = fFriend ? g_lpszFriend : g_lpszEnemy ;
+
 	const ptrdiff_t cItems = fFriend ? g_numOfFriends : g_numOfEnemies ;
 	TCHAR * ptr = lpBuffer;
 
 	if( cItems )
 	{
-		LPITEM_SORTER sorter = (LPITEM_SORTER) HeapAlloc( GetProcessHeap(), 0L, 
-														sizeof(ITEM_SORTER) * (size_t) cItems );
+		LPITEM_SORTER sorter = (LPITEM_SORTER) HeapAlloc( GetProcessHeap(), 0, 
+															sizeof(ITEM_SORTER) * (SIZE_T) cItems );
 		if( ! sorter )
 			return;
 
@@ -426,17 +450,17 @@ static void WriteIni_Worker( TCHAR * lpBuffer, size_t cchBuffer,
 			sorter[ i ].number = (int) i;
 			sorter[ i ].time = ReadIni_Time( list[ i ] );
 #ifdef _DEBUG
-			sorter[ i ].lpsz = &list[ i ][ 0 ];
+			sorter[ i ].lpsz = list[ i ];
 #endif
 		}
 		qsort( sorter, (size_t) cItems, sizeof(ITEM_SORTER), &item_comp );
 
 
-#if MAX_PROCESS_CNT < 256
-# error MAX_PROCESS_CNT should be at least 256
+#if (MAX_ENEMY_CNT < 256) || (MAX_FRIEND_CNT != MAX_ENEMY_CNT)
+# error MAX_ENEMY_CNT must be 256 or greater, and equal to MAX_FRIEND_CNT
 #endif
 		// Save only a limited number of items after sorted
-		const ptrdiff_t numOfItemsToSave = __min( MAX_PROCESS_CNT - 56, cItems );
+		const ptrdiff_t numOfItemsToSave = __min( MAX_ENEMY_CNT - 56, cItems );
 
 		//_CrtSetDebugFillThreshold(0);
 		for( i = 0; i < numOfItemsToSave; ++i )
@@ -472,59 +496,17 @@ static void WriteIni_Worker( TCHAR * lpBuffer, size_t cchBuffer,
 }
 
 
-BOOL SetSliderIni( LPCTSTR lpszString, const int iSlider )
+void SetSliderIni( const TCHAR * pszString, LRESULT iSlider )
 {
-	if( iSlider < SLIDER_MIN || iSlider > SLIDER_MAX || _tcslen( lpszString ) > 1000 ) return FALSE;
+	if( iSlider < SLIDER_MIN || iSlider > SLIDER_MAX || ! pszString ) return;
 
 	WriteDebugLog( TEXT( "SetSliderIni" ) );
-	WriteDebugLog( lpszString );
+	WriteDebugLog( pszString );
 
-
-	TCHAR strExeName[ MAX_PATH * 2 ] = _T( "" );
-/* - 1.1b7
-	int len = lstrlen( lpszTarget );
-	int start = -1;
-	int end = -1;
-	for( int i = len - 1; i >= 5; i-- )
-	{
-		if(
-			lpszTarget[ i ] == TEXT( ' ' ) &&
-			( lpszTarget[ i - 1 ] == TEXT( 'e' ) || lpszTarget[ i - 1 ] == TEXT( 'E' ) ) &&
-			( lpszTarget[ i - 2 ] == TEXT( 'x' ) || lpszTarget[ i - 2 ] == TEXT( 'X' ) ) &&
-			( lpszTarget[ i - 3 ] == TEXT( 'e' ) || lpszTarget[ i - 3 ] == TEXT( 'E' ) ) &&
-			lpszTarget[ i - 4 ] == TEXT( '.' )
-		)
-		{
-			end = i;
-			break;
-		}
-	}
-
-	for( ; i >=0; i-- )
-	{
-		if( lpszTarget[ i ] == TEXT( '\\' ) )
-		{
-			start = i + 1;
-			break;
-		}
-	}
-
-	if( start == -1 ) start = 0;
-
-	if( end == -1 || end - start <= 0 )
-	{
-		TCHAR dbg[1000];
-		wsprintf( dbg, TEXT("DEBUG: %s %d %d %d"), lpszTarget, start, end, end-start );
-		WriteDebugLog( dbg ) ;
-
-		return FALSE;
-	}
-
-	lstrcpy( lpszExeName, &lpszTarget[ start ] );
-	lpszExeName[ end - start ] = TEXT( '\0' );
-*/
+	TCHAR strExeName[ CCHPATH ] = _T( "" );
 // +1.1b7
-	PathToExe( lpszString, strExeName, MAX_PATH * 2 );
+	PathToExe( pszString, strExeName, _countof(strExeName) );
+	if( ! strExeName[ 0 ] || _tcschr( strExeName, _T('*') ) ) return;
 
 #if 0 //!defined( _UNICODE ) // ANSIFIX6
 	if( strlen( strExeName ) >= 19 )
@@ -534,13 +516,13 @@ BOOL SetSliderIni( LPCTSTR lpszString, const int iSlider )
 	}
 #endif
 
-	TCHAR strExeNameLower[ MAX_PATH * 2 ];
-	_bes_lower( strExeName, strExeNameLower, MAX_PATH * 2 );
+	TCHAR strExeNameLower[ CCHPATH ];
+	_bes_lower( strExeName, strExeNameLower, CCHPATH );
 
 	const TCHAR * strIniPath = GetIniPath();
 
-	TCHAR strNumber[ 100 ];
-	_stprintf_s( strNumber, _countof(strNumber), _T( "%d" ), iSlider );
+	TCHAR strNumber[ 16 ];
+	_stprintf_s( strNumber, _countof(strNumber), _T("%d"), (int) iSlider );
 
 	WritePrivateProfileString(
 		TEXT( "Slider" ), 
@@ -556,31 +538,21 @@ BOOL SetSliderIni( LPCTSTR lpszString, const int iSlider )
 		NULL,
 		strIniPath
 	);
-
-	return TRUE;
 }
 
-int GetSliderIni( LPCTSTR lpszTargetPath, HWND hWnd )
+int GetSliderIni( LPCTSTR lpszTargetPath, HWND hWnd, int iDef )
 {
 	TCHAR strExeName[ MAX_PATH * 2 ];
 	TCHAR strExeNameLower[ MAX_PATH * 2 ];
 
-	if( lpszTargetPath == NULL ) return 33;
+	if( iDef < SLIDER_MIN || SLIDER_MAX < iDef ) iDef = SLIDER_DEF;
 
-	const int len = (int) _tcslen( lpszTargetPath );
-	int start = 0;
-	int i;
-	for( i = len - 1; i >= 0; i-- )
-	{
-		if( lpszTargetPath[ i ] == TEXT( '\\' ) )
-		{
-			start = i + 1;
-			break;
-		}
-	}
+	if( ! lpszTargetPath ) return iDef;
 
-	_tcscpy_s( strExeName, _countof(strExeName), &lpszTargetPath[ start ] );
-#if 0 // !defined( _UNICODE ) // ANSIFIX7
+	const TCHAR * pBkSlash = _tcsrchr( lpszTargetPath, _T('\\') );
+	_tcscpy_s( strExeName, _countof(strExeName), pBkSlash ? pBkSlash + 1 : lpszTargetPath );
+
+#if 0 // ANSIFIX7
 	if( strlen( strExeName ) >= 19 )
 	{
 		strExeName[ 15 ] = '\0';
@@ -600,9 +572,9 @@ int GetSliderIni( LPCTSTR lpszTargetPath, HWND hWnd )
 		strIniPath
 	);
 #endif
-	int iSlider = (int) GetPrivateProfileInt( TEXT( "Slider" ), strExeNameLower, 33, strIniPath );
+	int iSlider = (int) GetPrivateProfileInt( TEXT( "Slider" ), strExeNameLower, iDef, strIniPath );
 	if( iSlider == 0 ) iSlider = 1; // for backward compat.
-	else if( iSlider < SLIDER_MIN || SLIDER_MAX < iSlider ) iSlider = 33;
+	else if( iSlider < SLIDER_MIN || SLIDER_MAX < iSlider ) iSlider = iDef;
 	else if( 99 < iSlider )
 	{
 		UINT uMenuState = GetMenuState( GetMenu( hWnd ), IDM_ALLOWMORETHAN99, MF_BYCOMMAND );
@@ -809,3 +781,73 @@ VOID InitSWIni( VOID )
 
 
 
+static void PathToExe_InPlace( TCHAR * pszPath )
+{
+	/*
+	C:\path\to\some.exeZ
+	1234567890123456789  : len = 19
+	012345678901234567*  : strPath[ i ] for i = len - 1 = 18
+	0123456789*          : strPath[ 10 ] == _T('\\') --> i = 10
+	           123456789 : cchToCopy = len - i  = 19 - 10 = 9 (incl. term NUL)
+	
+	
+	*/
+
+  	/*int len = (int) _tcslen( strPath );
+	for( int i = len - 1; i >= 0; i-- )
+	{
+		if( strPath[ i ] == TEXT( '\\' ) )
+		{
+			//lstrcpy( strPath, &strPath[ i + 1 ] ); // @fix 20111207
+			memmove( strPath, &strPath[ i + 1 ], (size_t)( len - i ) * sizeof(TCHAR) );
+			break;
+		}
+	}*/
+	//OutputDebugStringW(L"\r\n[in] ");
+	//OutputDebugStringW(strPath);
+	const TCHAR * pntr = _tcsrchr( pszPath, _T('\\') );
+	if( pntr && pntr[ 1 ] )
+		memmove( pszPath, pntr + 1, ( _tcslen( pntr + 1 ) + 1 ) * sizeof(TCHAR) );
+
+	//OutputDebugStringW(L"\r\n[out] ");
+	//OutputDebugStringW(strPath);
+	//OutputDebugStringW(L"\r\n");
+
+}
+
+
+static BOOL PathToExeEx( LPTSTR strPath, int iBufferSize )
+{
+	PathToExe_InPlace( strPath );
+
+	const int len = (int) _tcslen( strPath );
+
+	if(	len < 15 || _tcsicmp( &strPath[ len - 4 ], _T( ".exe" ) ) == 0	)
+	{
+		return TRUE;
+	}
+
+	int s = 0;
+	if(	_tcsicmp( &strPath[ len - 3 ], _T(".ex") ) == 0 )
+	{
+		s = 3;
+	}
+	else if( strPath[ len - 2 ] == _T('.')
+				&& ( strPath[ len - 1 ] == _T('e') || strPath[ len - 1 ] == _T('E') ) )
+	{
+		s = 2;
+	}
+	else if( strPath[ len - 1 ] == _T('.') )
+	{
+		s = 1;
+	}
+
+	if( s )
+	{
+		--s;
+		_tcscpy_s( &strPath[ len - s ], (rsize_t)( iBufferSize - ( len - s ) ), _T("exe") );
+		return TRUE;
+	}
+
+	return ( _tcsncat_s( strPath, (rsize_t) iBufferSize, _T( "~.exe" ), _TRUNCATE ) == 0 );
+}

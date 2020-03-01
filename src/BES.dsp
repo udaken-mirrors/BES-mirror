@@ -53,7 +53,7 @@ BSC32=bscmake.exe
 # ADD BSC32 /nologo
 LINK32=link.exe
 # ADD BASE LINK32 kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /nologo /subsystem:windows /machine:I386
-# ADD LINK32 odbc32.lib odbccp32.lib comctl32.lib Msimg32.lib Psapi.lib Winmm.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /nologo /subsystem:windows /machine:I386
+# ADD LINK32 odbc32.lib odbccp32.lib comctl32.lib Msimg32.lib Psapi.lib Winmm.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib Advapi32.lib /nologo /subsystem:windows /machine:I386
 # SUBTRACT LINK32 /pdb:none
 
 !ELSEIF  "$(CFG)" == "BES - Win32 Release Unicode"
@@ -82,7 +82,7 @@ BSC32=bscmake.exe
 LINK32=link.exe
 # ADD BASE LINK32 kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /nologo /subsystem:windows /machine:I386
 # SUBTRACT BASE LINK32 /incremental:yes /debug
-# ADD LINK32 odbc32.lib odbccp32.lib comctl32.lib Msimg32.lib Psapi.lib Winmm.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /nologo /subsystem:windows /machine:I386
+# ADD LINK32 odbc32.lib odbccp32.lib comctl32.lib Msimg32.lib Psapi.lib Winmm.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib Advapi32.lib /nologo /subsystem:windows /machine:I386
 # SUBTRACT LINK32 /verbose /pdb:none
 
 !ENDIF 
