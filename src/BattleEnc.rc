@@ -1,0 +1,389 @@
+//Microsoft Developer Studio generated resource script.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#define APSTUDIO_HIDDEN_SYMBOLS
+#include "windows.h"
+#undef APSTUDIO_HIDDEN_SYMBOLS
+#include "resource.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// English (U.S.) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+#ifdef _WIN32
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
+#endif //_WIN32
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// 24
+//
+
+1                       24      MOVEABLE PURE   "BES.manifest"
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Menu
+//
+
+IDC_BATTLEENC MENU DISCARDABLE 
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&Watch && Limit...\tw",       IDM_WATCH
+        MENUITEM SEPARATOR
+        MENUITEM "Ski&n...\tDouble Click",      IDM_SKIN
+        MENUITEM SEPARATOR
+        MENUITEM "&Snap...",                    IDM_SNAP
+        MENUITEM SEPARATOR
+        MENUITEM "E&xit\tx",                    IDM_EXIT
+        MENUITEM SEPARATOR
+        MENUITEM "Exit &Anyway\tCtrl+F9",       IDM_EXIT_ANYWAY
+    END
+    POPUP "&Do"
+    BEGIN
+        MENUITEM "Select &Target...\tt",        IDM_LIST
+        MENUITEM "&Unlimit All\tu",             IDM_STOP
+        MENUITEM "&Control...\tc",              IDM_SETTINGS
+        MENUITEM SEPARATOR
+        MENUITEM "U&nwatch",                    IDM_UNWATCH
+    END
+    POPUP "&Options"
+    BEGIN
+        MENUITEM "&Real-Time Mode",             IDM_REALTIME, CHECKED
+        MENUITEM SEPARATOR
+        MENUITEM "&Write Log",                  IDM_LOGGING, CHECKED
+        MENUITEM SEPARATOR
+        POPUP "&Language"
+        BEGIN
+            MENUITEM "Chinese (&Simplified)",       IDM_CHINESE_S
+            MENUITEM "Chinese (&Traditional)",      IDM_CHINESE_T
+            MENUITEM SEPARATOR
+            MENUITEM "&English",                    IDM_ENGLISH
+            MENUITEM SEPARATOR
+            MENUITEM "&Finnish",                    IDM_FINNISH
+            MENUITEM SEPARATOR
+            MENUITEM "F&rench",                     IDM_FRENCH
+            MENUITEM SEPARATOR
+            MENUITEM "&Japanese",                   IDM_JAPANESE
+            MENUITEM SEPARATOR
+            MENUITEM "&Spanish",                    IDM_SPANISH
+            MENUITEM SEPARATOR
+            MENUITEM "&Yamato-Kotoba",              IDM_JAPANESEo
+        END
+        MENUITEM SEPARATOR
+        MENUITEM "&Override Security Restrictions", IDM_DEBUGPRIVILEGE
+        MENUITEM "Allow Multiple &Instances",   IDM_ALLOWMULTI
+        MENUITEM SEPARATOR
+        MENUITEM "Always Li&st All",            IDM_ALWAYS_LISTALL
+        POPUP "Ad&vanced"
+        BEGIN
+            MENUITEM "Watch Response Time - &Normal (~4 sec)", IDM_WATCH_RT8
+            MENUITEM "Watch Response Time - &Middle (~2 sec)", IDM_WATCH_RT4
+            MENUITEM "Watch Response Time - &Fast (~1 sec)", IDM_WATCH_RT2
+            MENUITEM SEPARATOR
+            MENUITEM "&Allow More Than 99% Reduction", IDM_ALLOWMORETHAN99
+            MENUITEM "&Watch Multiple Instances",   IDM_WATCH_MULTI
+            MENUITEM "&Disable Shortcut Key [F1]",  IDM_DISABLE_F1
+        END
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About...\ta",                IDM_ABOUT
+        MENUITEM "&Keyboard Shortcuts",         IDM_ABOUT_SHORTCUTS
+        MENUITEM "&Command Line Help",          IDM_HELP_CMDLINE
+        MENUITEM SEPARATOR
+        POPUP "&Get Ukagaka"
+        BEGIN
+            MENUITEM "&Ghost Center",               IDM_GHOSTCENTER
+            MENUITEM SEPARATOR
+            MENUITEM "&Materia",                    IDM_UKAGAKA
+            MENUITEM "&SSP",                        IDM_SSP
+        END
+        MENUITEM SEPARATOR
+        MENUITEM "&Visit Homepage",             IDM_HOMEPAGE
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Accelerator
+//
+
+IDC_BATTLEENC ACCELERATORS MOVEABLE PURE 
+BEGIN
+    "?",            IDM_ABOUT,              ASCII,  NOINVERT
+    "A",            IDM_ABOUT,              VIRTKEY, NOINVERT
+    "C",            IDM_SETTINGS,           VIRTKEY, NOINVERT
+    "C",            IDM_SETTINGS,           VIRTKEY, ALT, NOINVERT
+    "G",            IDM_GSHOW,              VIRTKEY, CONTROL, NOINVERT
+    "M",            IDM_MINIMIZE,           VIRTKEY, NOINVERT
+    "T",            IDM_LIST,               VIRTKEY, NOINVERT
+    "U",            IDM_STOP,               VIRTKEY, NOINVERT
+    "U",            IDM_STOP,               VIRTKEY, ALT, NOINVERT
+    VK_DELETE,      IDM_STOP,               VIRTKEY, NOINVERT
+    VK_F9,          IDM_EXIT_ANYWAY,        VIRTKEY, CONTROL, NOINVERT
+    VK_INSERT,      IDM_LIST,               VIRTKEY, NOINVERT
+    VK_RETURN,      IDM_LIST,               VIRTKEY, NOINVERT
+    "W",            IDM_WATCH,              VIRTKEY, NOINVERT
+    "X",            IDM_EXIT,               VIRTKEY, NOINVERT
+    "X",            IDM_EXIT,               VIRTKEY, ALT, NOINVERT
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_ABOUTBOX DIALOGEX 22, 17, 333, 196
+STYLE DS_MODALFRAME | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_CLIENTEDGE | WS_EX_STATICEDGE
+FONT 10, "Tahoma", 0, 0, 0x1
+BEGIN
+    DEFPUSHBUTTON   "OK",IDOK,267,9,52,27,WS_GROUP
+    EDITTEXT        IDC_APP_NAME,6,3,246,13,ES_READONLY | NOT WS_BORDER,
+                    WS_EX_STATICEDGE
+    ICON            IDI_IDLE,IDI_ICON2,10,33,20,20
+    EDITTEXT        IDC_DESCRIPTION,50,36,171,16,ES_AUTOHSCROLL | 
+                    ES_READONLY | NOT WS_BORDER
+    EDITTEXT        IDC_DESCRIPTION2,50,89,268,8,ES_READONLY | NOT WS_BORDER
+    EDITTEXT        IDC_COPYRIGHT,50,98,268,8,ES_READONLY | NOT WS_BORDER
+    EDITTEXT        IDC_DATETIME,50,107,268,8,ES_READONLY | NOT WS_BORDER
+    EDITTEXT        IDC_EDITBOX_GPL,14,128,305,58,ES_MULTILINE | ES_READONLY | 
+                    NOT WS_BORDER | WS_VSCROLL,WS_EX_STATICEDGE
+END
+
+IDD_XLIST DIALOGEX 80, 80, 359, 230
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Which process would you like to limit?"
+FONT 10, "Tahoma", 0, 0, 0x1
+BEGIN
+    LISTBOX         IDC_TARGET_LIST,7,7,274,135,LBS_SORT | 
+                    LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_HSCROLL | 
+                    WS_TABSTOP
+    DEFPUSHBUTTON   "&Limit this",IDOK,300,7,50,29
+    PUSHBUTTON      "Limit/&Watch",IDC_WATCH,300,40,50,14
+    PUSHBUTTON      "&Close",IDCANCEL,300,58,50,29
+    PUSHBUTTON      "&Refresh (F5)",IDC_RELOAD,300,107,50,14
+    PUSHBUTTON      "&Friend",IDC_FRIEND,77,144,50,14
+    PUSHBUTTON      "&Unknown",IDC_RESET_IFF,133,144,50,14
+    PUSHBUTTON      "F&oe",IDC_FOE,188,144,50,14
+    PUSHBUTTON      "&Hide",IDC_HIDE,307,133,36,14,BS_FLAT
+    PUSHBUTTON      "&Show",IDC_SHOW,307,150,36,14,BS_FLAT
+    PUSHBUTTON      "As&k/show",IDC_SHOW_MANUALLY,307,167,36,14,BS_FLAT
+    PUSHBUTTON      "List &all",IDC_LISTALL_SYS,300,190,50,14,BS_FLAT
+    PUSHBUTTON      "Unfree&ze",IDC_UNFREEZE,300,207,50,14,BS_FLAT
+    EDITTEXT        IDC_EDIT_INFO,7,161,274,62,ES_MULTILINE | ES_READONLY | 
+                    NOT WS_BORDER | WS_VSCROLL,WS_EX_STATICEDGE
+END
+
+IDD_SETTINGS DIALOGEX 200, 0, 339, 328
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Limiter control"
+FONT 10, "Tahoma"
+BEGIN
+    GROUPBOX        "Target #1",IDC_GROUP1,7,7,325,54,BS_FLAT
+    EDITTEXT        IDC_EDIT_TARGET1,17,20,240,12,ES_AUTOHSCROLL | 
+                    ES_READONLY | NOT WS_BORDER | NOT WS_TABSTOP,
+                    WS_EX_STATICEDGE
+    CONTROL         "1",IDC_SLIDER1,"msctls_trackbar32",WS_TABSTOP,17,38,252,
+                    19
+    PUSHBUTTON      "1",IDC_BUTTON_STOP1,271,16,46,16
+    CTEXT           "",IDC_TEXT_PERCENT1,273,40,51,15,SS_CENTERIMAGE,
+                    WS_EX_STATICEDGE
+    GROUPBOX        "Target #2",IDC_GROUP2,7,69,325,54,BS_FLAT
+    EDITTEXT        IDC_EDIT_TARGET2,17,83,240,12,ES_AUTOHSCROLL | 
+                    ES_READONLY | NOT WS_BORDER | NOT WS_TABSTOP,
+                    WS_EX_STATICEDGE
+    CONTROL         "2",IDC_SLIDER2,"msctls_trackbar32",WS_TABSTOP,17,100,
+                    252,19
+    PUSHBUTTON      "2",IDC_BUTTON_STOP2,272,80,46,16
+    CTEXT           "",IDC_TEXT_PERCENT2,273,102,51,15,SS_CENTERIMAGE,
+                    WS_EX_STATICEDGE
+    GROUPBOX        "Target #3",IDC_STATIC,7,131,325,54,BS_FLAT
+    EDITTEXT        IDC_EDIT_TARGET3,17,144,240,12,ES_AUTOHSCROLL | 
+                    ES_READONLY | NOT WS_BORDER | NOT WS_TABSTOP,
+                    WS_EX_STATICEDGE
+    CONTROL         "3",IDC_SLIDER3,"msctls_trackbar32",WS_TABSTOP,17,162,
+                    252,19
+    PUSHBUTTON      "3",IDC_BUTTON_STOP3,271,141,46,16
+    CTEXT           "",IDC_TEXT_PERCENT3,273,164,51,15,SS_CENTERIMAGE,
+                    WS_EX_STATICEDGE
+    GROUPBOX        "Target Sleep/Awake Cycle",IDC_STATIC,7,194,325,52,
+                    BS_FLAT
+    RTEXT           "&Awake once in every",IDC_STATIC,16,208,108,9
+    EDITTEXT        IDC_EDIT_UNIT,132,205,51,15,ES_RIGHT | ES_NUMBER
+    LTEXT           "milliseconds (*)",IDC_STATIC,193,208,117,9
+    LTEXT           "(*) Use a small value (like 40) for smoother playback (valid = 2...400).  The smaller it gets, the less accurate percentage control you get.  Use 100 if you're not sure.",
+                    IDC_STATIC,21,222,295,20
+    EDITTEXT        IDC_EDIT_NOTE,22,258,295,31,ES_MULTILINE | ES_READONLY | 
+                    NOT WS_BORDER | WS_VSCROLL
+    DEFPUSHBUTTON   "&Close",IDOK,146,301,46,16
+END
+
+IDD_QUESTION DIALOGEX 60, 60, 331, 164
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION
+EXSTYLE WS_EX_CLIENTEDGE
+CAPTION "Confirmation"
+FONT 10, "Tahoma", 0, 0, 0x1
+BEGIN
+    DEFPUSHBUTTON   "&Yes",IDOK,79,133,50,14
+    PUSHBUTTON      "&Cancel",IDCANCEL,197,133,50,14
+    LTEXT           "msg1",IDC_MSG1,19,7,293,47
+    EDITTEXT        IDC_EDIT,29,61,273,56,ES_MULTILINE | ES_AUTOVSCROLL | 
+                    ES_READONLY | NOT WS_BORDER | WS_VSCROLL,
+                    WS_EX_STATICEDGE
+END
+
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+2 TEXTINCLUDE MOVEABLE PURE 
+BEGIN
+    "#define APSTUDIO_HIDDEN_SYMBOLS\r\n"
+    "#include ""windows.h""\r\n"
+    "#undef APSTUDIO_HIDDEN_SYMBOLS\r\n"
+    "#include ""resource.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE MOVEABLE PURE 
+BEGIN
+    "\r\n"
+    "\0"
+END
+
+1 TEXTINCLUDE MOVEABLE PURE 
+BEGIN
+    "resource.h\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO MOVEABLE PURE 
+BEGIN
+    IDD_ABOUTBOX, DIALOG
+    BEGIN
+        RIGHTMARGIN, 332
+    END
+
+    IDD_XLIST, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 352
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 223
+    END
+
+    IDD_SETTINGS, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 332
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 324
+    END
+
+    IDD_QUESTION, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 324
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 157
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDI_IDLE                ICON    DISCARDABLE     "idle.ico"
+IDI_ACTIVE              ICON    DISCARDABLE     "active.ico"
+
+#ifndef _MAC
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,6,2,0
+ PRODUCTVERSION 1,6,2,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "000004b0"
+        BEGIN
+            VALUE "Comments", "GNU General Public License\0"
+            VALUE "CompanyName", " \0"
+            VALUE "FileDescription", "Per-Process CPU Limiter\0"
+            VALUE "FileVersion", "1, 6, 2, 0\0"
+            VALUE "InternalName", "BES\0"
+            VALUE "LegalCopyright", "Copyright 2004-2014\0"
+            VALUE "LegalTrademarks", "\0"
+            VALUE "OriginalFilename", "BES.exe\0"
+            VALUE "PrivateBuild", "\0"
+            VALUE "ProductName", "BES - Battle Encoder Shirase\0"
+            VALUE "ProductVersion", "1, 6, 2, 0\0"
+            VALUE "SpecialBuild", "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0, 1200
+    END
+END
+
+#endif    // !_MAC
+
+#endif    // English (U.S.) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

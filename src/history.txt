@@ -1,0 +1,756 @@
+BES Battle Encoder Shirase
+
+1.1 beta 1 (2006-08-22)
+[NEW] French I/F
+
+1.1 beta 2 (2006-08-23)
+[NEW] skinnable
+[MOD] Slider: TIC FREQ 10
+[MOD] .ini is read from the same dir. as bes.exe, not cur. dir.
+
+1.1 beta 3 (2006-08-25)
+[FIX] Forgot a 'break;' in Settings, case WM_COMMAND: (No real harm)
+[FIX] SSTP didn't like the Greek letter 'beta'
+[NEW] SSTP when the List Dlg is opened.
+[MOD] Tick marks were at 11, 21, 31,...  Should have been at 10, 20, 30,...
+[MOD] When first run, check UserDefaultLangID not SystemDefaultLangID
+[MOD] A text like "-33%" in the Setting Dlg is now bold/navy, and grayed out when it should be.
+[MOD] Cosmetic changes for colors of clickable URLs. Especially when dragged with LBUTTON downed.
+
+1.1 beta 4 (2006-08-25)
+[NEW] GetModuleFileNameEx to get the full path of the target. (Unicode path supported)
+
+1.1 beta 5 (2006-08-26)
+[FIX] PathToExeEx was buggy if the exe name ends in .EXE (upper case)
+[FIX] PathToProcess was buggy when the length of the exe is very long (>=19 ?)
+[FIX] ANSI: Couldn't watch/limit if the length of the exe is very long (>=19 ?)
+[FIX] IDC_TEXT_TARGET3 was grayed out when watching.
+[FIX] A small bug in the menu i18n
+[NEW] Always shows the path in its long form (C:\Progra~1 -> C:\Program Files)
+[MOD] Uses the Tahoma font (good font-link for Unicode char)
+[MOD] Cosmetic, for clickable URLs
+[MOD] Watch/Limit w the full path.
+
+1.1 beta 6 (2006-08-26)
+[MOD] EXIT_ANYWAY: Ctrl+END -> Ctrl+F9
+[MOD] Cosmetic: 'blinking circle' to show the limiter is active.
+[MOD] French i/f updated.
+[MOD] A little clean-up.
+
+1.1 beta 7 (2006-09-01)
+[FIX] BES didn't remember the percentage if the target name doesn't end in .exe.
+[MOD] Debug file, not in the cur dir, but in the same directory as bes.exe
+[NEW] --minimize to start as minimized
+
+1.1 beta 8 (2006-09-02)
+[MOD] Real-time mode = FALSE by default
+[MOD] Cosmetic
+           (2006-09-03)
+[MOD] The nCmdShow key in _sw.ini is deleted when the hidden window is shown again.
+           (2006-09-04)
+[FIX] Critical bug fix: Manu, WindowText, etc. were foobared for some users:
+ Changing MB_ERR_INVALID_CHARS to 0 in MultiByteToWideChar seems to fix the problem.
+
+1.1 beta 9 (2006-09-05)
+[NEW] Skin doesn't need to be 640x480
+           (2006-09-06)
+[FIX] RECT rect in Function 'Hack' was meaningless; changed to RECT hackrect.
+[FIX] Cosmetic: Window Size is slightly too small because of SM_CX(CY)BORDER
+[MOD] Less flickering when sliders are moved
+[NEW] Skin changer
+[NEW] Remembers the dir where exe to watch is
+
+1.1 beta 10 (2006-09-11)
+[FIX] Slider DlgBox: Cosmetic
+[MOD] 1-letter short-cut keys (t u c x) now work with ALT too.
+[NEW] F5 to refresh the Target List.
+[NEW] Full path info in "Save Snap to File" (Unicode build only)
+[NEW] Full path info for IFF_SYSTEM (Unicode build only)
+             (2006-09-12)
+[MOD] Cosmetic
+
+1.1 beta 11 (2006-09-16)
+[FIX] AdjustLength now considers surrogates.
+            (2006-09-21)
+[MOD] GetWindowLong -> GetWindowLongPtr
+[FIX] If throttle #3 is 'paused' (PID is set but unlimited), that PID is used
+ when one tries to watch a new, already-running target via GetOpenFileName.
+[FIX]? Rarely the error msg "Target Missing" is not shown when it should be.
+ This bug is not reproducible so far.
+ As a workaround, we now redundantly call InvalidateRect() in possibly related cases.
+
+1.2         (2006-09-21)
+[MOD] Cosmetic: EM_SETMARGINS etc.
+            (2006-09-22)
+[FIX] IsWindowsXPOrLater was wrong for newer-than-XP OSes.
+[MOD] Compiled Setting: automatic inline expansion
+            (2006-09-23)
+[MOD] TargetListDlg: Graceful when the user hold down F5.
+[NEW] TargetListDlg: Ask/Show can be canceled in the middle.
+[MOD] More anti-ukagaka.
+            (2006-09-24)
+[MOD] Watch: less flicker
+            (2006-09-25)
+[MOD] Hook for Keydown in ListDlg was to strong (MessageBox was affected)
+            (2006-09-26)
+[FIX] Target List Dlg: [Limit/Watch] btn was enabled even when not doable.
+            (2006-10-01)
+[FIX] TargetListDlg: F5 was not always valid.
+
+1.2.1-beta  (2006-10-08)
+[FIX] GShow didn't work if the target is minimized
+            (2006-10-13)
+[MOD] Updated GHOST TOWN url.
+            (2006-10-29)
+[MOD] Changed the link target: GHOST TOWN -> Nanika Ghost Center
+[FIX] "Which target?" is now not SSTPed if AviUtl-related msg is to be SSTPed.
+            (2006-11-11)
+[MOD] Disabled IDM_CROW.
+            (2006-11-17)
+[MOD] The main threads is always THREAD_PRIORITY_TIME_CRITICAL.
+      Process is REALTIME_PRIORITY_CLASS if Real-time mode, else HIGH_PRIORITY_CLASS.
+[MOD] A little clean up.
+            (2006-11-20)
+[MOD] Every thread of mine is THREAD_PRIORITY_TIME_CRITICAL, w/ a hack for sync.
+
+1.2.2
+2006-11-27
+[FIX] src/BattleEnc.rc was missing in the released zip (not needed to run the binary).
+[MOD] Cosmetic: U+2212 instead of L'-' in the Unicode build.
+[MOD] Window Title "Default IME" doesn't count.
+
+2006-12-12
+[FIX] Once you let BES 'watch' anything, BES tried to close an already-closed thread-handle
+ when exiting (because "Unwatch" didn't set hThread=NULL). The handle is closed anyway,
+ so this is not critical, but is an obvious bug.
+ 
+1.2.2a
+2007-11-22
+[FIX] Failed to call DestroyMenu after CreatePopupMenu. in 2 places.
+
+1.2.3-beta (test1)
+2007-12-02
+[NEW] SeDebugPrivilege.
+http://support.microsoft.com/kb/131065
+(!)Windows ME not supported
+
+
+1.3.0-alpha
+2007-12-02
+[MOD] SendMessageCallback to PostMessage.
+[FIX] Cosmetic: SSTP w/ "Unicode" chars.
+
+2007-12-24
+[MOD] Removed g_bBlock.
+[FIX] When unlimiting, AdjustTokenPrivileges was called after CloseHandle.
+
+1.3.1-alpha
+2007-12-29
+[NEW] "Override Security Restrictions" option. (IDM_DEBUGPRIVILEGE)
+[MOD] XP Theme. <1.2.3>
+
+1.3.2-alpha
+2007-12-30
+[MOD] WM_TIMER: reacts only when necessary.
+2008-01-20
+[MOD] Sleep: good accuracy ensured <1.2.3>
+[FIX] WNDCLASSEX::hbrBackground <1.2.3>
+2008-02-08
+[MOD] WM_SIZE calls SetForgroundWindow unless minimized. <1.2.3>
+
+1.3.3-beta
+2008-05-08
+-Same as 1.3.2-alpha
+
+1.3.4-beta
+2008-05-09
+[FIX] Menu: Check-state for IDM_DEBUGPRIVILEGE was lost on I/F Language Change.
+
+1.3.5-beta
+2008-05-23
+[FIX] An invisible window, if iconic, is wrongly restored on "Hide"->"Show".
+2008-05-25
+[MOD] Cosmetic.
+
+1.3.6-beta
+2008-06-01
+[MOD] Iconized window is still iconized on "Hide"->"Show".
+
+2008-06-10
+[FIX] Cosmetic: 'Watch' button was not disabled for an already-limited target.
+[MOD] Better way to filter repeated VK_F5/VK_R keys, preventing repeated reloading.
+[FIX] If the watched target cannot be limited at all, watch should be disabled.
+[MOD] Workaround for some keyboard application launchers.
+[MOD] The --minimize switch hides BES if its instance already exists.
+[NEW] Shortcut: [M] to Send to System Tray.
+[MOD] Cosmetic: About box: font.
+
+1.3.7-beta
+2008-06-19
+[MOD] Shortcuts Ascii to VK.
+[MOD] When started, it now does SetParent(NULL).
+[NEW] [B] to minimize.
+
+2008-07-21
+? _sw.ini reint pb.
+
+1.3.8
+2008-08-05
+[NEW] GShow matches a substring.
+[MOD] Less strict iBootTime checking.
+
+1.4.0-alpha1
+2008-11-02
+[FIX] SetFocus is needed if focused button is disabled. (fix also in v1.3.8)
+[FIX] Dialog proc should return INT_PTR not LRESULT. (fix also in v1.3.8)
+[NEW] Slider can go up to 100,101,102,103 meaning 99.2%, 99.4%, 99.6%, 99.8%.
+
+-------------
+1.4.0-alpha2
+2008-11-02
+[MOD] NOTE added to the Setting dialogbox.
+[MOD] Setting dialogbox: variable color of the number showing the percentage. (also in v1.3.8)
+[FIX] A tooltip didn't reappear after clicked. - Hack WM_PARENTNOTIFY. (also in v1.3.8)
+[MOD] Tooltip delay shorter. (also in v1.3.8)
+[FIX] TOOLINFO:: uFlags/uId incorrect. (fix also in v1.3.8)
+[MOD] The 1st button is BS_DEFPUSHBUTTON now. (also in v1.3.8)
+[MOD] Trackbar OnMouseWheel: Refined.
+[MOD] Always remember the settings when the "Control" dialogue is closed. (also in v1.3.8)
+ - Before, the settings were remembered only on OK.
+[FIX] Cosmetic: The main window should have WS_CLIPCHILDREN.
+[MOD] Cosmetic: Main Window: No r-click menu on the URL. (also in v1.3.8)
+
+2008-11-05
+[MOD] When watching, NOTIFYICONDATA::szTip says "Watching". (also in v1.3.8.2)
+[NEW] APP_LONGNAME.
+[FIX] Wrong percentage in szTip when > 99%.
+
+2008-11-06
+[MOD] Make several global variables volatile.
+[NEW] The "Allow More Than 99%" option.
+-------------
+
+1.4.1
+2010-04-19
+[MOD] _WIN32_WINNT etc. so that new SDK will work with VC6.
+-------------
+
+1.4.2
+2010-11-07
+[NEW] The "Allow Multiple Instances" option.
+[MOD] Handle WM_INITMENUPOPUP instead of WM_INITMENU.
+
+2011-01-12
+1.4.2 release.
+-------------
+
+1.4.3
+2011-06-19
+[MOD] No context menu when a (disabled) child is r-clicked.
+[MOD] Context menu on RBUTTONUP, not RBUTTONDOWN.
+[ADD] R-DblClick = IDM_GSHOW.
+*[FIX] A few bugs in IDM_GSHOW.
+
+2011-06-20
+[MOD] Ignore if a (disabled) child is dlb-clicked.
+
+2011-06-22
+1.4.3 released.
+-------------
+
+2011-08-08
+1.5.0-beta [1.5.0.0]
+[NEW] IDC_EDIT_UNIT: as suggesetd by Marek G.
+
+2011-11-27
+[FIX] GetModuleFileNameEx may fail. - Thanks to Slawek P. --> Partial fix also in v1.4.4
+[NEW] define DPSAPI_VERSION=1 just in case.
+[MOD] Other minor updates.
+[FIX] List.cpp: Potential buf overrun @ lpszThisExe. --> Quick-fix also in v1.4.4
+[NEW] Show PID both in hex and decimal.
+
+2011-11-28
+[NEW] IDM_ALWAYS_LISTALL option.
+
+2011-11-29
+1.5.0-beta2 [1.5.0.1]
+[NEW] Use GetProcessImageFileName if needed.
+
+2011-11-30
+[FIX] If the Settings dialog is open and if you Unlimit All using the tray icon, 
+      Limit/Unlimit buttons on the Dialogue get inconsistent.
+[FIX] Similar problems about the xList dialog.
+[NEW] xList: context menu.
+[MOD] Removed a few unnecessary volatile's.
+[NEW] Project files for VC2005/2008.
+[MOD] Rewrote .utf8.h & .sjis.h safely using escape sequences.
+[FIX] 64-bit compat. pbs eg UINT vs UINT_PTR.
+[FIX] Possible crash in GetArgument. (!!) --> FIXED also in v1.4.4
+[FIX] Possible buffer overrun in GetArgument. (!!) --> FIXED also in v1.4.4
+[FIX] Minor pbs on IDC_SHOW/HIDE. --> FIXED also in v1.4.4
+[FIX] HandleToMemDC: check the ret val of GlobalAlloc/Lock. --> FIXED also in v1.4.4
+[MOD] Renamed g_bSelChange -> g_bSelNextOnHide.
+[MOD] OpenDebugLog: BOM only when file is empty.
+
+2011-12-01
+[MOD] Replaced a few funcs with the _s versions.
+[FIX] NotifyIcon: szTip/szInfo possible overrun. --> FIXED also in v1.4.4
+[MOD] list.cpp: Load/UnloadFunctions & ProcessToPath.
+
+2011-12-02
+[FIX] Don't use wsprintf when possibly writing more than 1024 cch.
+[NEW] PrintFileHeader: recognizes newer OS versions.
+[FIX] Meaningless WM_SETFONT to IDM_MSG2. --> FIXED also in v1.4.4
+[MOD] Cosmetic "usage for the process" -> "usage of the process" --> FIXED also in v1.4.4
+
+2011-12-03
+[FIX] lstrcmpi: doesn't work as expected in some locales.
+[MOD] CreateThread to _beginthreadex (as CreateThread1).
+[MOD] InitSWIni: uses 64-bit sig. ("Boot64").
+[FIX] WM_CREATE: wrong break. --> FIXED also in v1.4.4
+[FIX] Watch from Cmd line: !Allow-more-than-99 ignored @ def%.
+
+2011-12-04
+1.5.0-beta3 [1.5.0.2]
+[NEW] Cmd line: accepts non-integer, eg "bes.exe target.exe 99.2"
+[NEW] Project files for VC2010.
+[FIX] list.cpp: Question: missing "default:". --> FIXED also in v1.4.4
+
+2011-12-05
+[FIX] SubListProc: send LBN_SELCHANGE when necessary.
+- Bug in beta3.
+[MOD] Load/UnloadDLLs: mutex-protected.
+[FIX] BES_SHOW_MANUALLY: use SPI_GETWORKAREA. --> FIXED also in v1.4.4
+[FIX] watch.cpp: Possible buf overrun in LimitPlus. --> FIXED also in v1.4.4
+[MOD] wsprintf_s -> _stprintf_s.
+
+2011-12-06
+[MOD] Anti-Ukagaka: Timer -> on WM_NCUAHDRAWCAPTION/WM_GETICON.
+-- and WM_USER_CAPTION (2011-12-19).
+[MOD] Use timeBegin/EndPeriod less.
+
+2011-12-07
+[FIX] PathToExe: possibly overlap-memmove tried by lstrcpy. --> FIXED also in v1.4.4
+[MOD] Get rid of wsprintf/lstrlen.
+
+2011-12-08
+[MOD] GetSakuraHwnd improved.
+[MOD] Get rid of lstrcat/lstrcmp.
+
+2011-12-16
+1.5.0-beta4 [1.5.0.3]
+[FIX] missing default in WM_COMMAND.
+[FIX] UpdateTooltip didn't work right (since 1.3.8). --> FIXED also in v1.4.4
+[MOD] GetSakuraHwnd slightly improved.
+
+2011-12-17
+[FIX] HookProc: use CallNextHookEx instead of return 0. --> FIXED also in v1.4.4
+[MOD] WndProc: handle WM_CONTEXTMENU instead of WM_RBUTTONUP.
+
+2011-12-19
+1.5.0-beta5 [1.5.0.4]
+[MOD] More accurate --minimize parsing.
+- Older versions are confused if started from command line and the name of target
+  exe happens to contain "--minimize " (e.g. "Strange name --minimize wtf.exe").
+[FIX] WriteDebugLog before OpenDebugLog. --> FIXED also in v1.4.4
+[FIX] (DEBUG build) WriteIni broken in beta4:
+- This is because of _SECURECRT__FILL_STRING.
+
+2011-12-20
+[MOD] HookProc: WH_KEYBOARD and only when xList dlg is active.
+[MOD] Question Dlg: YES/NO/CANCEL -> OK/CANCEL
+[FIX] .ini file needs BOM (Unicode build). <<TODO v1.4.5>>
+
+2011-12-21
+[FIX] main: call CloseDebugLog on early return @ !hWnd. --> FIXED also in v1.4.4.
+[FIX] Alt-key conflict in Finnish: &Target vs &Tiedosto. <<TODO v1.4.5>>
+
+2011-12-25
+1.4.4 and 1.5.1-beta released
+-------------
+
+2011-12-26 (1.5.2pre)
+[FIX] OleUninitialize not called on (unlike) early return. --> FIXED also in v1.4.5.
+[FIX] cx,cy slightly too small in CreateWindow.
+[MOD] GetWindowPosIni: improved.
+[MOD] Removed unhelpful IDM_ONLINEHELP.
+[FIX] Don't SetSliderIni with " (Watching)".
+[FIX] Settings: Don't show "Target #3" if WATCHING_IDLE.
+[MOD] A little clean-up.
+
+2011-12-27
+[MOD] Hack_Worker: a little optimization.
+[MOD] Settings: unit: use MIN_UNIT/MAX_UNIT if too small/big.
+- Before, a too small or a too big value was simply ignored.
+
+2011-12-28
+[MOD] Hack_Worker: slight cleanup.
+[MOD] Updated text in IDD_SETTINGS dialobox.
+[FIX] (DEBUG build): AdjustLength: problem caused by _SECURECRT__FILL_STRING.
+- A problem introduced in v1.5.1.
+- This problem indirectly showed that dst and src may be overlapped.
+
+2011-12-29
+[FIX] AdjustLength: no strcat with dst/src overlapped. --> FIXED also in v1.4.5.
+[FIX] SetTargetPlus: sema2 not released on early return. --> FIXED also in v1.4.5.
+[MOD] SetTargetPlus: slightly improved.
+[MOD] Enemy/Friend count is not volatile.
+[MOD] g_bRealTime is not volatile.
+[MOD] VC2008 builds: added /Wall, removed /Oi.
+
+2011-12-30
+[MOD] IsAbsFoe: improved a bit.
+[FIX] xList: reselect old font on WM_PAINT. --> FIXED also in v1.4.5.
+[MOD] DirectSSTP: a little.
+
+2012-01-01 (1.5.2pre1)
+[MOD] GetIniPath() optimiz.
+[MOD] "x264" is absfoe.
+
+2012-01-26 (1.5.2)
+[MOD] Ignore g_bSelNextOnHide on WM_CONTEXTMENU.
+
+2012-01-26
+1.4.5 and 1.5.2 released
+-------------
+
+2012-02-09
+[MOD] Trivial (no real changes).
+
+2012-04-23 (1.6.0-test1)
+[NEW] (Re)watch & unwatch etc. with --exitnow, --unlimit, --toggle (via WM_COPYDATA).
+ (1) bes.exe --exitnow
+      = one instance of already-running BES will exit, after unlimiting all.
+ (2) bes.exe "path\to\target.exe" --unlimit
+      = unlimit/unwatch target.exe if limited/wached now.
+ (3) bes.exe "path\to\target.ext" [10]
+      = (re)watch target.exe [optionally, with parameter 10].
+ (4) bes.exe "path\to\target.exe" [10] --toggle
+      = unlimit/unwatch the target like (2) if currently limited. Otherwise like (3).
+ NOTE: 1. Currently, the target must be specified with its full path.
+       2. The "Watch" slot is used for (3); if the slot is already taken, (3) doesn't work.
+ - Options based on suggestions by Matthias E.
+
+2012-04-24 (1.6.0-test2)
+[FIX] IDM_STOP_FROM_TRAY: enable/disable IDC_BUTTON_STOP3 in Settings dlg.
+ - Fixed also in 1.5.3.#
+ - This was simplified in test5, as UpdateStatus() will update Settings/List in general.
+[FIX] in Test1, "bes --unlimit" caused a sema error if watching idly.
+[MOD] GetArgument: improved.
+
+2012-04-25 (1.6.0-test3)
+[MOD] SW_MINIMIZE -> SW_SHOWMINNOACTIVE for --minimize.
+[FIX] Options were not handled right in test2, on WM_COPYDATA.
+[MOD] ParseArgs (WAS: GetArgument): rewritten.
+- This func. is also used in WinMain now.
+[FIX] (v1.5.3) minor logical bugs in GetArgument, related to lpszTargetPath.
+[MOD] Don't activate on ExitNow.
+[MOD] Refuse to target another instance of BES.
+[MOD] About 10% less memory usage.
+- Removed huge static struct's that can be dynamic.
+
+2012-04-26 (1.6.0-test4)
+[NEW] Allow 100%.
+[NEW] "bes taraget.exe 25" and "bes target.exe -25" mean the same thing
+[NEW] bes --help.
+[FIX] Unnecessary 2-sec sleep on Exit_CommandFromTaskbar.
+ - Fixed also in 1.5.3.#
+[FIX] In test3, Debug log was not closed on --exitnow.
+[MOD] GetProcessDetails uses a caller-provided buffer.
+ - Better than allocating/freeing everytime it's called.
+[FIX] (v1.5.3) xList: disable IDC_LISTALL_SYS if IDM_ALWAYS_LISTALL is checked.#
+[NEW] xList: "List &all" toggled as "F&ast list" if IDM_ALWAYS_LISTALL is checked.
+[FIX] xList: don't hook keys if Ctrl is down, except Ctrl+R.
+[NEW] Enable/Disable logging without restarting.
+[NEW] Target#1/2 are also relimitable via COPYDATA.
+[NEW] COPYDATA is handled, even when multiple instances are allowed.
+[NEW] --allowmulti & --disallowmulti switches.
+[NEW] Short form of switches, such as -m for --minimize.
+[FIX] Target w/o options was not recognized in test3.
+
+2012-04-27
+[MOD] Removed unnecessary ZeroMemory in GetProcessDetails etc.
+[FIX] Missing ReleaseSemaphore on XLIST_WATCH_THIS. (unlikely case)
+ - Fixed also in 1.5.3.#
+[MOD] CreateThread1 simplified as CreateThread2.
+[FIX] (v1.5.3) Harmless logical error in CreateThread1.
+[FIX] Harmless logical bug in CloseDebugLog.
+ - Fixed also in 1.5.3.
+[MOD] Debug log shows PID.
+[FIX] Harmless logical bugs in ReadIni.
+ - Do ++g_numOfEnemies or ++g_numOfFriends before max-limit check not after.
+ - However this bug was harmless since the max number of loops in the "for"
+  is safely limited anyway.
+ - Fixed also in 1.5.3.
+[FIX] Apparent unterm. str in SetSliderIni.
+ - It's actually terminated, but it may look dubious.
+ - Fixed also in 1.5.3.
+[FIX] Couldn't remember new enemies if there were already many.
+ - There is a hard-coded limit of 256, and basically BES never forgot
+   about old enemies/friends.
+ - BES is modified so it only remembers most recent 200 enemies
+   and most recent 200 friends.
+[FIX] Ini: confused by '=' in exe names.
+[MOD] ~10% less memory usage by removing unnecessarily long array etc.
+
+2012-04-28
+[FIX] UpdateStatus didn't update SettingsDlg/ListDlg.
+[NEW] CopyData: watch-unwatch togglable.
+[NEW] CopyData: can change percentage for a watching-idle slot too.
+
+2012-04-30 (1.6.0-test5)
+[FIX] list.cpp: (LONG)XLIST_WATCH_THIS -> (LPARAM)XLIST_WATCH_THIS
+ - Fixed also in 1.5.3.
+[FIX] CopyData: non-Unicode ver. unlimitable in some cases.
+[FIX] CopyData: #2 not rewatched on toggle, after unwatched.
+
+2012-05-01
+[FIX] main.cpp: bExitNow was wrongly set in test5 in some cases.
+[MOD] main.cpp: minor clean up w/ subroutines.
+
+2012-05-02
+[FIX] About box: if necessary refocus OK button on L-button-down.
+[MOD] About box: minor cosmetic tweaks (height of IDC_DESCRIPTION)
+[MOD] main.cpp: more clean-up.
+[MOD] g_hMutexDLL: tweaked so it works even if it's NULL.
+[NEW] More global boss-key handling.
+[MOD] main.cpp: call ShowWindow/UpdateWindow even when hiding.
+- Changed also in v1.5.3.
+[FIX] Improper "inline" for SetSliderText.
+- Fixed also in v1.5.3.
+[MOD] Settings: cleaned, esp. on WM_HSCROLL.
+
+2012-05-03 (1.6.0-test6)
+[FIX] PathToProcess: too long str is when >= cchMAX, not > cchMAX.
+- Fixed also in v1.5.3.
+[NEW] Watch multiple instances.
+- under the Options | Advanced submenu, or with --watch-multi.
+- Based on a suggestion by David M.
+[NEW] Watch response time options (8/4/2 secs).
+[FIX] tooltips.cpp: IDM_ONLINEHELP is no more necessary.
+- Fixed also in v1.5.3.
+[FIX] xList: IDC_TARGET_LIST: "if( g_bHack[ 3 ] )"
+- should have been: if(g_bHack[2]||g_bHack[3])
+- This caused "Busy. Can't start watching." error on watch,
+ if #2 is used but not watching.
+- Fixed also in v1.5.3 & v1.4.6. ###
+[FIX] Release sema on "Busy. Can't start watching." (see above).
+- This caused various sema-related errors.
+- Fixed also in v1.5.3 & v1.4.6. ###
+
+2012-05-04
+[MOD] xList: Better "List all"/"Normal list" handling.
+- There shouldn't be a "List all" button after "List all" is selected
+  because all is already listed.
+[FIX] xList: lpSavedWindowText should be zero'ed.
+- in case MultiByteToWideChar fails.
+- Fixed also in v1.5.3.
+[MOD] xList: can hold more items, arraies reallocated if needed.
+- Previously, max=256.
+[FIX] xList must return XLIST_CANCELED, not 0, on error.
+- Fixed also in v1.5.3.
+[MOD] xList: use SetWindowRedraw on WM_USER_REFRESH.
+[MOD] xList: various clean ups.
+[MOD] CopyData: can handle multi. instances of the target path.
+[FIX] WM_COMMAND: don't handle HIWORD(wp)==1 if lp!=0.
+- Fixed also in v1.5.3.
+[MOD] About box: minor cleanup.
+
+2012-05-05
+[NEW] Sort xList.
+[MOD] TARGETINFO::wThreadCount WORD->u32.
+- In fact, this is meaningless, as max thread cnt is 128 now.
+- The member removed at all on 2012-05-06.
+[NEW] Hack: can limit up to 32768 threads.
+- Before, the max was 128, not enough for httpd.exe, with ~256 threads.
+[NEW] Unfreeze: can unfreeze up to 32768 threads.
+[NEW] Unfreeze: use Debug privilege.
+[FIX] list: GetProcessInfoMsg max msg cch should be ~6500 not 4096.
+- Possible crash in rare situations.
+- Fixed in v1.5.3 & v1.4.6. ###
+- In 1.6.0, memory is simply allocated dynamically.
+[NEW] invalid_parameter_handler.
+[FIX] EnableDebugPrivilege: TOKEN_PRIVILEGES tpPrev, uninitialized.
+- Fixed in v1.5.3 & v1.4.6.
+- This func was poorly written anyway.
+- In 1.6.0, it was rewritten as SetDebugPrivilege.
+[MOD] Load DebugPrivilege-related functions dynamically.
+- They're now enabled on non-Unicode build too.
+- They're always called; no more optional (IDM_DEBUGPRIVILEGE).
+
+2012-05-06
+[NEW] GetProcessDetails2: about 30 times faster than
+  old GetProcessDetails. ###
+- Using cached pairs.
+- Before ~180 ms (348 ms if list all); now 6 ms (11 ms to list all).
+- Meaning, the target list dialog box opens quickly now.
+[MOD] Removed unnecessary WININFO::dwThreadId.
+[MOD] Get rid of TARGETINFO::dwThreadId & wThreadCount as well.
+[NEW] ShowProcessWindow says "No windows!" if no windows.
+- Before nothing happened in such a situation.
+
+2012-05-11
+[FIX] Keyboard input over-hooked: don't hook in menu mode.
+- A recent bug.
+[MOD] Simplified the THIS_BUTTON_IS_DISABLED macros.
+[MOD] IDC_EDIT_INFO: tab stop.
+
+2012-05-13 (v1.6.0-test7)
+[FIX] Memory leak in Hack_Worker.###
+- CloseHandle was not called for thread handles in one case, though
+ it seems that usually thread handles are all NULL in this case.
+- Fixed also in v1.5.3 & v1.4.6. ###
+
+2012-05-25
+[MOD] Hack: cosmetic: errorflag -> errorflags.
+
+2012-06-01 (v1.6.0-beta)
+[FIX] Hack: minor logical flaw about strStatus.
+
+2012-09-27
+[FIX] list.cpp: ti[ index ].fWatch was not reset on Cancel.
+- Fixed also in v1.5.3 & v1.4.6. ###
+[FIX] list.cpp, Question: lpTarget could have been NULL.
+
+2012-10-19
+[MOD] Start BES and do nothing, if --unlimit failed.
+
+2013-02-23
+[MOD] Update copyright year.
+
+2013-02-27 (1.6.0rc)
+[NEW] The shortcut key [F1] can be disabled via Options.
+
+2013-04-10 (1.6.0rc2)
+[MOD] Cosmetic. "Sleep/Awake Cycle" -> "Target Sleep/Awake Cycle" etc.
+[MOD] default.skin ("Maldives").
+[NEW] SSE2 build.
+
+2013-04-21
+*[FIX] KeyboardHookProc: Overhooked.
+- This was a regression in v1.6.0; the bug is not in older versions.
+[NEW] Add "Minimize" to the context menu.
+[NEW] Can load ../defskin.jpg.
+
+2013-04-22 (1.6.0rc3)
+[FIX] WM_CONTEXTMENU triggered by VK_APPS etc. was sometimes not handled right.
+- This is an old bug, also in older versions.
+
+2013-04-23
+[FIX] WM_CONTEXTMENU: a minor logical flaw in RC3.
+- Technically fMouseClicked is (x!=-1 AND y!==-1) not OR.
+- Not causing any real problem, as you can't click mouse at -1 pos. anyway.
+
+2013-04-25
+[MOD] LoadSkin: minor optimizations.
+[MOD] LoadSkin, ChangeSkin: don't DeleteBitmap while bmp is selected.
+
+2013-04-28
+[MOD] g_bSelNextOnHide is ignored if Shift key is down.
+
+2013-04-29
+[MOD] Get rid of a C4191 using (void*).
+[MOD] ChangeSkin: Don't re-create a dummy bmp.
+[MOD] Skin.cpp: a few more optimizations.
+- PatBlt instead of Rectangle, etc.
+[FIX] Bad #if/endif in HandleToMemDC: VC6 build didn't work.
+- This was a beta regression; the current ver. 1.5.2 is fine.
+
+2013-05-05
+[FIX] Minor bug in LoadSkin.
+- Not szFile != NULL, but szFile[ 0 ] != _T('0').
+[MOD] Skin.cpp: minor cleanups.
+
+2013-05-14 (rc3+) ***
+[MOD] LargeAddressAware if VC2008 SSE2.
+[MOD] Use (_M_IX86_FP == 2) instead of (SSE2).
+
+2013-10-08 (1.6.1-test)
+[MOD] Every thread asks DebugPrivilege.
+- This fixes a bug where a "secure" process can't be watched
+  from command-line, and its full path is not shown in the Target list.
+  A "secure" process is a process for which OpenProcess fails normally.
+
+2013-10-15 (1.6.1-test2)
+[FIX] hack.cpp: EnableDebugPrivilege: OpenTT fix.
+- A logical flaw.  Possible crash.  Don't use OpenTT without checking if it's not NUL.
+- Apparently, this was harmless in reality.
+- Backported to 1.6.0.
+[FIX] hack.cpp: SetDebugPrivilege: "*pPrevAttributes = 0L" bug.
+- Do not set pPrevAttributes=0; we might use the original value.
+- This was almost harmless b/c *pPrev is typically 0 anyway.
+- Backported to 1.6.0.
+- TODO: these funcs are not very good
+[MOD] UNIT_MIN 2.
+[MOD] Updated the static text for Sleep/Awake cycle in Control dlg.
+[MOD] Updated ShowCommandLineHelp.
+[FIX] CommandLineHelp did not use hWnd.
+- This was a new problem in 1.6.x.
+- Backported to 1.6.0.
+
+2013-12-20 (1.6.1-test2a)
+[MOD] U+2013 to U+2014 in some places in Unicode ver.
+
+2014-01-10 (1.6.1 final)
+[MOD] copyright years to 2014.
+
+2014-01-11 1.6.1 Released.
+-------------
+
+2014-03-02 (1.6.2pre)*
+(!)[FIX] List All/Normal List was broken on 2013-10-08.
+- Regression in 1.6.1.  Harmless but not intended.
+- The change on 2013-10-08 was so powerful that every process was listed automatically.
+- 20140307: Basically, though, we now only hide "BES.exe" & "System" unless List All.
+  So the only difference between 1.6.1 and 1.6.2 is that "System" is hidden by default.
+  In 1.6.1 only "BES.exe" is hidden by default (this is hidden in 1.6.2 too).
+
+2014-03-03 (1.6.2pre/1.7test1.1)*
+[FIX] SystemParametersInfoW to SystemParametersInfo in 2 places.
+[MOD] Changed VC6 output dir. from ..\ to .\vc6
+- Also do not use a SPACE in the path if compiled by VC6.
+[FIX] From hardcoded 1023, to MAX_WINDOWTEXT(-1) in hack.cpp.
+[FIX] Added HEAP_ZERO_MEMORY in two places on WM_INITDIALOG.
+- This would help if MultiByteToWideChar should fail.
+
+2014-03-06 (1.7test1.4)*
+(!)[FIX] Stale fThisIsBES flag on UpdateProcessSnap.
+- This resulted in a "fake BES" process that was not selectable as target, when all processes
+  were listed and the list was refreshed.  Perhaps an old bug.
+- HOTFIX also in 1.6.2.
+(!)[FIX] IFF: Potentially overlapping _tcscpy_s (dst==src) in 5 places.
+- Fixed with a macro, Tcscpy_s.
+- This might have been related to my memo "IFF not saved unless exited immediately?"
+- Also backported to 1.6.2.
+
+2014-03-07 (1.6.2/1.7test2.1)
+[FIX] (v1.6.2) Always use SafeLoadLibrary in LoadFunctions() in list.cpp.
+
+2014-03-08 (1.6.2/1.7test2.2)
+(!)[FIX] Possible use-after-free in AllocSortedPairs (ex: CacheProcessThreads_Alloc).
+- If ReAlloc failed, the old pointer was freed but not set NULL.
+- FIX also in 1.6.2.
+- Not a real problem, since the size of memory blocks here is like 100 KiB max;
+  unlikely to fail to allocate.
+
+2014-03-10 (1.6.2/1.7test2.4)
+[FIX] In 1.6.x and before, target info could be broken after Unfreeze.
+- That is, if slot iMyId was used for some target (X) but inactive (unlimited),
+  then target info for that slot would be replaced by target info of exe that was
+  unfrozen (Y); after that, if you tried to re-limit X via the Control dlg,
+  Y would be limited instead.
+- Not a serious problem, but it was a bug; fixed in 1.6.2.
+- 1.7.x as of now does not use this bad code anyway.
+
+2014-03-11 (1.6.2/1.7test2.5)
+(!)[FIX] xList: SaveDC was too late.
+- DC was saved after one new font was selected, and "restored". Not good.
+- Fixed also in 1.6.2.
+
+2014-03-13
+[MOD] Target Dlg: ensure visible on ContextMenu.
+
+
+2014-03-15 1.6.2 Released.
+-------------
+
