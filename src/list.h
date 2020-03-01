@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2017 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -20,7 +20,9 @@ typedef struct tagProcessInfo {
 	DWORD dwProcessId;
 
 	DWORD numOfThreads;
-	UINT slotid;
+	WORD slotid;
+	bool fWatched;
+	bool fUnlimited;
 
 	int iIFF;
 	short _cpu;
@@ -68,10 +70,11 @@ void CachedList_Refresh( DWORD msMaxWait );
 BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes );
 
 void WriteIni_Time( const TCHAR * pExe );
+BOOL UpdateIFF_Ini( BOOL bCleanSliderSection );
 BOOL VerifyOSVer( DWORD dwMajor, DWORD dwMinor, int iSP );
 TCHAR * GetPercentageString( LRESULT lTrackbarPos, TCHAR * lpString, size_t cchString );
 
-BOOL LimitProcess_NoWatch( HWND hDlg, TARGETINFO * pTarget, PROCESSINFO& ProcessInfo, const int * aiParams ); // v1.7.5
+BOOL LimitProcess_NoWatch( HWND hDlg, TARGETINFO * pTarget, PROCESSINFO& ProcessInfo, const int * aiParams, int mode = 0 ); // v1.7.5
 TCHAR * PIDToPath_Alloc( DWORD dwProcessID, size_t * pcch ); // v1.7.5
 
 static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam );
@@ -90,7 +93,7 @@ typedef struct tagWinInfo {
 	TCHAR szTitle[ MAX_WINDOWS_CNT ][ MAX_WINDOWTEXT ];
 	HWND hwnd[ MAX_WINDOWS_CNT ];
 	ptrdiff_t numOfItems;
-	INT_PTR dummy;
+	DWORD_PTR pid; // unused (as of 2019-08-15)
 } WININFO;
 
 #define TIMER_ID (0x101u)
@@ -271,14 +274,18 @@ static void ListView_SetCurrentSel( HWND hListview, ptrdiff_t sel, BOOL bEnsureV
 
 	if( bEnsureVisible )
 		ListView_EnsureVisible( hListview, sel, FALSE );
+
+
+
+
 }
-/*
-static ptrdiff_t ListView_GetCurrentSel( HWND hListview )
+
+static ptrdiff_t ListView_GetCurrentSel( HWND hLV )
 {
 // ListView_GetSelectedColumn only on XP
-	return SendMessage( hListview, LVM_GETNEXTITEM, (WPARAM) -1, LVNI_ALL | LVNI_FOCUSED );
+	return SendMessage( hLV, LVM_GETNEXTITEM, (WPARAM) -1, LVNI_ALL | LVNI_FOCUSED );
 }
-*/
+
 static void EnableDlgItem( HWND hDlg, int idCtrl, BOOL bEnable )
 {
 	HWND hwndCtrl = GetDlgItem( hDlg, idCtrl );
@@ -319,8 +326,7 @@ static void LV_OnSelChange(
 #endif
 	ptrdiff_t cItems,
 	ptrdiff_t selectedItem,
-	ptrdiff_t& curIdx,
-	const TARGETINFO * pTarget
+	ptrdiff_t& curIdx
 )
 {
 	if( selectedItem < 0 || cItems <= selectedItem || ! rgProcessInfo ) return;
@@ -335,15 +341,18 @@ static void LV_OnSelChange(
 
 	BOOL bLimitable = TRUE;
 	BOOL bUnlimitable = FALSE;
-
 	extern ptrdiff_t g_nPathInfo;
-	const TARGETINFO& info = pTarget[ Item.slotid ];
 
-	// An already-watched target is always re-watchable (with different parameters).
-	// Also, anything is watchable as long as the watch table is not full.
-	// g_nPathInfo is never supposed to be negative, but we'll check that just in case
-	BOOL bWatchable = ( ( g_nPathInfo < MAX_WATCH || info.fWatch ) && 0 <= g_nPathInfo ) ? TRUE : FALSE ;
-//	BOOL bUnwatchable = FALSE;
+	/// ***Tentative*** FIX @ 20190317 ## Item.slotid==MAX_SLOTS is possible; g_bHack[MAX_SLOTS-1] is the last element
+	/// ***TODO*** probably the "! g_bHack[ Item.slotid ]" case should be removed here
+	///	BOOL bWatchable = ( ! Item.fWatched || ! g_bHack[ Item.slotid ] ) && g_nPathInfo < MAX_WATCH;
+	BOOL bWatchable = ( ! Item.fWatched
+						|| Item.slotid == MAX_SLOTS
+						|| Item.slotid < MAX_SLOTS && ! g_bHack[ Item.slotid ] ) && g_nPathInfo < MAX_WATCH;
+
+
+
+	//BOOL bUnwatchable = FALSE;
 	BOOL bSlotAllocated = FALSE;
 
 	BOOL bFriend = TRUE;
@@ -357,6 +366,7 @@ static void LV_OnSelChange(
 
 	const UINT g = Item.slotid;
 
+
 	TCHAR szSliderBtnText[ 16 ] = _T("Unl&imit");
 	if( g < MAX_SLOTS && g != 3 )
 	{
@@ -367,8 +377,8 @@ static void LV_OnSelChange(
 			_tcscpy_s( szSliderBtnText, _countof(szSliderBtnText), _T("Rel&imit") );
 	}
 
-//	TCHAR szWatchBtnText[ 16 ] = _T("Limit/&Watch");
-	/*if( ! bWatchable && g == 2 )
+	/*TCHAR szWatchBtnText[ 16 ] = _T("Limit/&Watch");
+	if( ! bWatchable && g == 2 )
 	{
 		bUnwatchable = TRUE;
 		_tcscpy_s( szWatchBtnText, _countof(szWatchBtnText), _T("Un&watch") );
@@ -448,7 +458,9 @@ static void LV_OnSelChange(
 	EnableDlgItem( hDlg, IDOK, bLimitable );
 //	SetDlgItemText( hDlg, IDOK, szOkBtnText );
 
+
 	EnableDlgItem( hDlg, IDC_WATCH, bWatchable );
+
 	/*
 	(@) Unknown [ Friend ] [ Unknown ] [ Foe ]
 	^^^         ^        ^
@@ -463,11 +475,13 @@ static void LV_OnSelChange(
 
 	SetProcessInfoMsg( hDlg, Item, (int) g );
 
-	if( g < MAX_SLOTS && g != 3 )
+//	if( g < MAX_SLOTS && g != 3 )
+	if( g != 3 ) // 20170906
 	{
 		if( GetFocus() != GetDlgItem( hDlg, IDC_SLIDER ) )
 		{
-			const int iSlider = g_Slider[ g ];
+			// const int iSlider = g_Slider[ g ];
+			const int iSlider = GetSliderIni( Item.szPath, g_hWnd ); // 20170906
 			TCHAR strPercent[ 16 ] = _T("");
 			GetPercentageString( iSlider, strPercent, _countof(strPercent) );
 			SendDlgItemMessage( hDlg, IDC_SLIDER, TBM_SETPOS, (WPARAM) TRUE, (LPARAM) iSlider );
@@ -670,7 +684,7 @@ static void _add_item( HWND hwndList, int iff, PROCESSINFO& ti )
 	item.lParam = (LONG) ti.dwProcessId;
 	const int itemIdx = ListView_InsertItem( hwndList, &item );
 
-	if( ti.slotid != MAX_SLOTS )
+	if( ti.slotid < MAX_SLOTS ) // ti.slotid==MAX_SLOTS if no slot is used for this item
 	{
 		TCHAR szSlotText[ 8 ];
 		_stprintf_s( szSlotText, _countof(szSlotText), _T("#%d%c"), 
@@ -750,8 +764,8 @@ static int picmp_SLOT2( const void * pv1, const void * pv2 )
 {
 	const PROCESSINFO& target1 = PICAST( pv1 );
 	const PROCESSINFO& target2 = PICAST( pv2 );
-	int id1 = (target1.slotid == MAX_SLOTS)? -1 : (int) target1.slotid;
-	int id2 = (target2.slotid == MAX_SLOTS)? -1 : (int) target2.slotid;
+	int id1 = (target1.slotid >= MAX_SLOTS)? -1 : (int) target1.slotid;
+	int id2 = (target2.slotid >= MAX_SLOTS)? -1 : (int) target2.slotid;
 
 	if( id1 == id2 )
 		return ( target1.dwProcessId > target2.dwProcessId ) ? +1 : -1 ;
@@ -1086,6 +1100,7 @@ static ptrdiff_t UpdateProcessSnap(
 
 	ptrdiff_t pix = 0; // rgProcessInfo array index
 	ptrdiff_t cx = 0;    // CPUTime array (s_lpCPUTime) index
+
 #ifdef _DEBUG
 	SIZE_T skipped = 0;
 #endif
@@ -1097,13 +1112,12 @@ static ptrdiff_t UpdateProcessSnap(
 		while( s + cntThreads < numOfPairs && sorted_pairs[ s + cntThreads ].pid == dwProcessID )
 			++cntThreads;
 
-		if( dwProcessID == 0 
-			|| dwProcessID == dwCurrentPID && ! fListAll )
-		{
+		if( dwProcessID == 0 ||
+			dwProcessID == dwCurrentPID && ! fListAll ) {
 #ifdef _DEBUG
 			++skipped;
 #endif
-			continue;
+				continue;
 		}
 
 		HANDLE hProcess = OpenProcess(
@@ -1117,6 +1131,7 @@ static ptrdiff_t UpdateProcessSnap(
 #endif
 			continue;
 		}
+
 
 
 		FILETIME ftCreated, ftExited, ftKernel, ftUser;
@@ -1267,11 +1282,22 @@ static ptrdiff_t UpdateProcessSnap(
 
 	}
 #ifdef _DEBUG
-	if( (SIZE_T) pix == numOfPIDs - skipped )
+	if( (SIZE_T) pix != numOfPIDs - skipped )
 	{
-		; //ok
+		MessageBox( NULL, _T("BAD pix"), NULL, MB_OK|MB_ICONSTOP|MB_TOPMOST);
+		/*SIZE_T n = 0;
+		DWORD prev = (DWORD)-1;
+		for( ptrdiff_t j = 0; j < numOfPairs; ++j ) {
+			if( sorted_pairs[j].pid != prev ) {
+				++n;
+				prev = sorted_pairs[j].pid;
+			}
+			WCHAR aa[ 1000 ];
+			swprintf_s( aa, 1000, L"[%u/%u] %d/%d:%08x:%08x {pix=%d; skipped=%u}\n",
+				n, numOfPIDs, j, numOfPairs, sorted_pairs[j].pid, sorted_pairs[j].tid, pix, skipped );
+			OutputDebugString(aa);
+		}*/
 	}
-	else MessageBox( NULL, _T("BAD pix"), NULL, MB_OK|MB_ICONSTOP|MB_TOPMOST);
 #endif
 
 	MemFree( sorted_pairs );
@@ -1325,7 +1351,7 @@ static INT_PTR LV_OnCustomDraw(
 		if( cd.iSubItem == EXE )
 		{
 			// The item is currently being limited
-			UINT slotid = (arPi && itemIndex < cItems) ? arPi[ itemIndex ].slotid : MAX_SLOTS ;
+			UINT slotid = (UINT)( arPi && itemIndex < cItems ? arPi[ itemIndex ].slotid : MAX_SLOTS );
 			if( slotid < MAX_SLOTS && g_bHack[ slotid ] )
 			{
 				cd.clrText = TEXT_COLOR;
@@ -1417,7 +1443,7 @@ typedef struct tagTargetInfo {
 
 void ResetTi( TARGETINFO& ti )
 {
-	int slotid_saved = ti.slotid;
+	const WORD slotid_saved = ti.slotid;
 
 	if( ti.lpPath ) TcharFree( ti.lpPath );
 	if( ti.disp_path ) TcharFree( ti.disp_path );
@@ -1474,4 +1500,15 @@ BOOL TiCopyFrom( TARGETINFO& dst, const TARGETINFO& src )
 	dst.fUnlimited = src.fUnlimited;
 
 	return TRUE;
+}
+
+static bool has_prefix( const TCHAR * szText ) // 2019-08-15
+{
+	return( szText != NULL
+		&& szText[ 0 ] == _T('[')
+		&& _T('0') <= szText[ 1 ] && szText[ 1 ] <= _T('9')
+		&& _T('0') <= szText[ 2 ] && szText[ 2 ] <= _T('9')
+		&& szText[ 3 ] == _T(']')
+		&& szText[ 4 ] == _T(' ')
+		&& szText[ 5 ] != _T('\0') );
 }

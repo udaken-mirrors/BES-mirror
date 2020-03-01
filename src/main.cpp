@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2014 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -15,6 +15,7 @@ HINSTANCE g_hInst = NULL;
 HWND g_hWnd = NULL;
 HWND g_hListDlg = NULL;
 HWND g_hSettingsDlg = NULL;
+HWND g_hAboutDlg = NULL;
 BOOL g_bLogging = FALSE;
 static HHOOK hKeyboardHook = NULL;
 static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lParam );
@@ -26,8 +27,8 @@ void ReadIni( BOOL& bAllowMulti, BOOL& bLogging );
 void ShowCommandLineHelp( HWND hWnd );
 CLEAN_POINTER DWORD * PathToProcessIDs( const PATHINFO& pathInfo, ptrdiff_t& numOfPIDs );
 
-static DWORD _bes_init( int& nCmdShow );
-static void _bes_uninit( void );
+static DWORD _bes_init( int& nCmdShow, bool& fAnotherBES );
+static void _bes_uninit( int iReason );
 static void _prevent_dll_preloading( void );
 static HWND _create_window( HINSTANCE hInstance, DWORD dwStyle );
 #if defined(_MSC_VER) && 1400 <= _MSC_VER
@@ -55,11 +56,12 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 	_set_invalid_parameter_handler( invalid_parameter_handler );
 #endif
 
-	const DWORD dwStyle = _bes_init( nCmdShow );
+	bool fAnotherBES = false;
+	const DWORD dwStyle = _bes_init( nCmdShow, fAnotherBES );
 
 	if( ! dwStyle )
 	{
-		_bes_uninit();
+		_bes_uninit( fAnotherBES ? 0 : 1 );
 		return 0;
 	}
 
@@ -70,9 +72,10 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 			FALSE, // initially non-signaled
 			NULL   // created without a name
 		);
+
 	if( ! hEvent_Exiting )
 	{
-		_bes_uninit();
+		_bes_uninit( -1 );
 		return 0;
 	}
 
@@ -80,7 +83,7 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 	if( ! hReconSema )
 	{
 		CloseHandle( hEvent_Exiting );
-		_bes_uninit();
+		_bes_uninit( -2 );
 		return 0;
 	}
 
@@ -97,7 +100,7 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 		}
 		OleUninitialize(); //*
 		CloseHandle( hEvent_Exiting );
-		_bes_uninit();
+		_bes_uninit( -3 );
 		return 0;
 	}
 
@@ -165,7 +168,7 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 	OleUninitialize(); //*
 	CloseHandle( hEvent_Exiting );
 
-	_bes_uninit();
+	_bes_uninit( 1 );
 
 	return (int) msg.wParam;
 }
@@ -407,7 +410,7 @@ void tokendebug( HANDLE hProcess )
 	}
 #endif
 }
-static DWORD _bes_init( int& nCmdShow )
+static DWORD _bes_init( int& nCmdShow, bool& fAnotherBES )
 {
 	LoadFunctionPtrs();
 
@@ -554,6 +557,7 @@ static DWORD _bes_init( int& nCmdShow )
 
 		HWND hwndList[ 32 ];
 		memset( hwndList, 0, sizeof(hwndList) );
+		fAnotherBES = false;
 
 		// safety prevents an infinite loop, possibly caused by FindWindowEx if the window order
 		// is changed before this for-loop is broken.
@@ -561,6 +565,8 @@ static DWORD _bes_init( int& nCmdShow )
 			( hwndFound = FindWindowEx( NULL, hwndFound, APP_CLASS, NULL ) ) != NULL && idxFound < 32;
 			++idxFound )
 		{
+			fAnotherBES = true;
+
 			if( bEmptyCmd )
 			{
 				hwndToShow = hwndFound;
@@ -667,7 +673,9 @@ static DWORD _bes_init( int& nCmdShow )
 	return dwStyle;
 }
 
-static void _bes_uninit( void )
+
+// iReason: 1=normal exit; 0=exit as another BES is running; -1/-2/-3=error exit 
+static void _bes_uninit( int iReason )
 {
 	if( hKeyboardHook )
 	{
@@ -675,10 +683,16 @@ static void _bes_uninit( void )
 		hKeyboardHook = NULL;
 	}
 
-	WriteIni( g_fRealTime ); // this frees pointers like g_lpszEnemy
+	if( iReason > 0 ) {
+		BOOL bOK = WriteIni( g_fRealTime );
+		WriteDebugLog( bOK ? _T("*** WriteIni OK ***") : _T("### WriteIni BAD ###") );
+	} else {
+		WriteDebugLog( iReason ? _T("### ERROR EXIT ###") : _T("< Early Exit >") );
+	}
 
 	CloseDebugLog();
 
+	FreePointers(); // free pointers like g_lpszEnemy
 	g_hWnd = NULL;
 	UnloadFunctionPtrs();
 }
@@ -738,7 +752,7 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 				hwndFocus = GetParent( hwndFocus );
 
 			if( hwndFocus
-				&& ( hwndFocus == g_hWnd || hwndFocus == g_hListDlg || hwndFocus == g_hSettingsDlg ) )
+				&& ( hwndFocus == g_hWnd || hwndFocus == g_hListDlg || hwndFocus == g_hSettingsDlg || hwndFocus == g_hAboutDlg ) )
 			{
 				/*
 				// SendMessage may time out if the dialogbox is there but is about to be destroyed.

@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2017 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -20,6 +20,7 @@ extern HINSTANCE g_hInst;
 extern HWND g_hWnd;
 extern HWND g_hSettingsDlg;
 extern HWND g_hListDlg;
+extern HWND g_hAboutDlg;
 extern BOOL g_bLogging;
 extern bool g_fRealTime;
 extern bool g_fHide;
@@ -281,7 +282,7 @@ WriteDebugLog(s);
 			for( ; i < MAX_SLOTS; ++i )
 			{
 				g_bHack[ i ] = FALSE;
-				ti[ i ].slotid = (int) i;
+				ti[ i ].slotid = (WORD) i;
 				hSemaphore[ i ] = CreateSemaphore( NULL, 1L, 1L, NULL ); // todo : wasteful
 			}
 
@@ -305,14 +306,16 @@ WriteDebugLog(s);
 			const TCHAR * lpszCommandLine = GetCommandLine();
 
 			int aiParams[ 2 ] = { 0, 0 };
+			int mode = DEF_MODE;
 			const int iSlider = ParseArgs( lpszCommandLine, CCHPATH,
 											strTargetPath, strTargetExe, strOptions,
-											fAllowMoreThan99, &aiParams[ 0 ] );
+											fAllowMoreThan99, &aiParams[ 0 ], &mode );
 
 			const DWORD pid = ParsePID( strTargetPath ); // v1.7.5
 
 			TCHAR dbgstr[ 128 ] = _T("");
-			_stprintf_s( dbgstr, _countof(dbgstr), _T("cycle=%d, delay=%d, pid=%lu @ WM_CREATE"), aiParams[0], aiParams[1], pid );
+			_stprintf_s( dbgstr, _countof(dbgstr), 
+				_T("cycle=%d, delay=%d, mode=%d, pid=%lu @ WM_CREATE"), aiParams[0], aiParams[1], mode, pid );
 			WriteDebugLog( dbgstr );
 
 			const BOOL bUnlimit = IsOptionSet( strOptions, _T("--unlimit"), _T("-u") );
@@ -334,7 +337,7 @@ WriteDebugLog(s);
 				// It's ok even if strTargetPath is an instance of BES.
 				// Watch and Hack both can handle such a situation properly.
 				ti[ 2 ].dwProcessId = TARGET_PID_NOT_SET; // (0) just in case
-				SetTargetPlus( hWnd, ti, strTargetPath, iSlider, &aiParams[ 0 ] );
+				SetTargetPlus( hWnd, ti, strTargetPath, iSlider, &aiParams[ 0 ], mode );
 			}
 
 			SendNotifyIconData( hWnd, ti, NIM_ADD );
@@ -375,12 +378,16 @@ WriteDebugLog(s);
 
 		case WM_USER_RESTART:
 		{
-			unsigned id = LOWORD( wParam );
+			int id = (int) LOWORD( wParam );
+			int mode = (int) HIWORD( wParam );
 			if( id < MAX_SLOTS && id != 3 )
 			{
 				// prevent double restarting
 				if( WaitForSingleObject( hSemaphore[ id ], 200 ) == WAIT_OBJECT_0 )
+				{
+					ti[ id ].mode = (WORD) mode;
 					SendMessage( hWnd, WM_USER_HACK, (WPARAM) id, (LPARAM) &ti[ id ] );
+				}
 				else
 					MessageBox( hWnd, TEXT( "Semaphore Error" ), APP_NAME, MB_OK | MB_ICONSTOP );
 			}
@@ -619,18 +626,19 @@ WriteDebugLog(s);
 					g_fRealTime ? _T( " (Real-time mode)" ) : _T( "" ) );
 				SetWindowText( hWnd, lpszWindowText );
 			}
-
+/***
 			if( g_bHack[ 3 ] )
 			{
-				//EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
+				if( g_nPathInfo >= MAX_WATCH ) EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
+				else EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
 				EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_ENABLED );
 			}
 			else
 			{
-				//EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
+				EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
 				EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED );
 			}
-
+***/
 			/*if( g_bHack[ 0 ] && g_bHack[ 1 ] && ( g_bHack[ 2 ] || g_bHack[ 3 ] ) )
 			{
 				EnableWindow( hButton[ 0 ], FALSE );
@@ -849,7 +857,8 @@ WriteDebugLog(s);
 				HMENU hMenu = GetMenu( hWnd );
 				bool fAllowMoreThan99 = IsMenuChecked( hMenu, IDM_ALLOWMORETHAN99 );
 				int aiParams[ 2 ] = { 0, 0 };
-				const int iSlider = ParseArgs( strCommand, CCHPATH, strTargetPath, strTargetExe, strOptions, fAllowMoreThan99, &aiParams[ 0 ] );
+				int mode = DEF_MODE;
+				const int iSlider = ParseArgs( strCommand, CCHPATH, strTargetPath, strTargetExe, strOptions, fAllowMoreThan99, &aiParams[ 0 ], &mode );
 
 				const DWORD pid = ParsePID( strTargetPath ); // v1.7.5
 
@@ -918,6 +927,7 @@ WriteDebugLog(s);
 				pathInfo.slider = iSlider;
 				if( aiParams[ 0 ] != -1 ) pathInfo.wCycle = (WORD) aiParams[ 0 ];
 				if( aiParams[ 1 ] != -1 ) pathInfo.wDelay = (WORD) aiParams[ 1 ];
+				if( mode == 0 || mode == 1 ) pathInfo.mode = (WORD) mode;
 
 				if( g_bHack[ 3 ] && bAdd )
 				{
@@ -940,6 +950,7 @@ WriteDebugLog(s);
 								ti[ sx ].fUnlimited = false;
 								if( aiParams[ 0 ] != -1 ) ti[ sx ].wCycle = (WORD) aiParams[ 0 ];
 								if( aiParams[ 1 ] != -1 ) ti[ sx ].wDelay = (WORD) aiParams[ 1 ];
+								if( mode == 0 || mode == 1 ) ti[ sx ].mode = (WORD) mode;
 							}
 						}
 					}
@@ -972,10 +983,11 @@ WriteDebugLog(s);
 					{
 						for( ptrdiff_t px = 0; px < g_nPathInfo; ++px )
 						{
-							if( StrEqualNoCase( strTargetPath,  g_arPathInfo[ px ].pszPath ) )
+							if( StrEqualNoCase( strTargetPath, g_arPathInfo[ px ].pszPath ) )
 							{
 								if( aiParams[ 0 ] != -1 ) g_arPathInfo[ px ].wCycle = (WORD) aiParams[ 0 ];
 								if( aiParams[ 1 ] != -1 ) g_arPathInfo[ px ].wDelay = (WORD) aiParams[ 1 ];
+								if( mode == 0 || mode == 1 ) g_arPathInfo[ px ].mode = (WORD) mode;
 								break;
 							}
 						}
@@ -1010,6 +1022,7 @@ WriteDebugLog(s);
 
 							if( aiParams[ 0 ] != -1 ) ti[ i ].wCycle = (WORD) aiParams[ 0 ];
 							if( aiParams[ 1 ] != -1 ) ti[ i ].wDelay = (WORD) aiParams[ 1 ];
+							if( mode == 0 || mode == 1 ) ti[ i ].mode = (WORD) mode;
 
 							if( g_bHack[ i ] ) // currently limited
 							{
@@ -1170,8 +1183,10 @@ WriteDebugLog(s);
 
 					for( slotid = 0; slotid < MAX_SLOTS; ++slotid )
 					{
-						if( fStopIt[ slotid ] )
+						if( fStopIt[ slotid ] ) {
 							SendMessage( hWnd, WM_USER_STOP, (WPARAM) slotid, 0 );
+							//ti[ slotid ].fUnlimited = true;  // flag not (yet) used: use ! g_bHack[ slotid ] instead
+						}
 					}
 					break;
 				}
@@ -1358,6 +1373,9 @@ WriteDebugLog(s);
 						if( g_hSettingsDlg )
 							SendMessage( g_hSettingsDlg, WM_COMMAND, IDCANCEL, 0 );
 						
+						if( g_hAboutDlg )
+							SendMessage( g_hAboutDlg, WM_COMMAND, IDCANCEL, 0 );
+
 						ShowWindow( hWnd, SW_SHOWMINIMIZED );
 					}
 					break;

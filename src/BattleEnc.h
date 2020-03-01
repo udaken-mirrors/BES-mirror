@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2017 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -7,7 +7,6 @@
 
 #if !defined(BATTLEENC_H)
 #define BATTLEENC_H
-
 
 #if defined(_MSC_VER) && _MSC_VER > 1000
 # pragma once
@@ -21,26 +20,29 @@
 #define APP_CLASS TEXT( "BATTLEENC" )
 #ifdef _UNICODE
 # define APP_NAME L"BES \x2014 Battle Encoder Shiras\x00E9"
-# define APP_LONGNAME L"BES \x2014 Battle Encoder Shiras\x00E9 1.7.7"
+# define APP_LONGNAME L"BES \x2014 Battle Encoder Shiras\x00E9 1.8.0-test17"
 #else
 # define APP_NAME "BES - Battle Encoder Shirase"
-# define APP_LONGNAME "BES - Battle Encoder Shirase 1.7.7"
+# define APP_LONGNAME "BES - Battle Encoder Shirase 1.8.0-test17"
 #endif
 #define APP_HOME_URL TEXT( "http://mion.faireal.net/BES/" )
 #ifdef _MBCS
 # undef _MBCS
 #endif
 
+// define this to enable "Joe" i.e. enable the slider #3 (IDC_SLIDER3) while watching-but-not-limiting
+#define COLD_WATCH_SLIDER 1
+
 #ifdef _UNICODE
 # ifndef UNICODE
 #  define UNICODE
 # endif
-# define APP_COPYRIGHT L"Copyright \251 2004" L"\x2013" L"2017 mion"
+# define APP_COPYRIGHT L"Copyright \251 2004" L"\x2013" L"2019 mion"
 #else
 # ifdef UNICODE
 #  undef UNICODE
 # endif
-# define APP_COPYRIGHT "Copyright (c) 2004-2017 mion"
+# define APP_COPYRIGHT "Copyright (c) 2004-2019 mion"
 #endif
 
 #ifdef _UNICODE
@@ -122,6 +124,7 @@
 # define SLIDER_MAX 108
 #endif
 #define SLIDER_DEF 33
+#define DEF_MODE 0
 
 #define CP_SJIS 932U
 
@@ -349,7 +352,8 @@ typedef struct tagTargetInfo {
 	TCHAR * disp_path;
 	DWORD dwProcessId;
 	
-	int slotid;
+	WORD slotid;
+	WORD mode;
 	bool fWatch;
 	bool fRealTime;
 	bool fUnlimited;
@@ -387,7 +391,7 @@ unsigned __stdcall Hack( void * pv );
 bool IsActive( void );
 
 BOOL SelectWatch( HWND hWnd, TARGETINFO * pti );
-BOOL SetTargetPlus( HWND hWnd, TARGETINFO * pti, const TCHAR * pszTargetPath, int iSlider, const int * aiParams = NULL );
+BOOL SetTargetPlus( HWND hWnd, TARGETINFO * pti, const TCHAR * pszTargetPath, int iSlider, const int * aiParams = NULL, int mode = 0 );
 
 BOOL Unfreeze( HWND hWnd, DWORD dwProcessID );
 
@@ -401,6 +405,8 @@ typedef struct tagPathInfo {
 	int slider;
 	WORD wCycle;
 	WORD wDelay;
+	DWORD mode;
+	DWORD dummy;
 } PATHINFO;
 
 DWORD PathToProcessID(
@@ -461,6 +467,7 @@ VOID InitMenuFre( HWND hWnd );
 #endif
 
 BOOL WriteIni( bool fRealTime );
+void FreePointers( void );
 
 void SetSliderIni( const TCHAR * pszString, LRESULT iSlider );
 int GetSliderIni( LPCTSTR lpszTarget, HWND hWnd, int iDef = 33 );
@@ -471,7 +478,7 @@ VOID InitSWIni( VOID );
 VOID SaveCmdShow( HWND hWnd, int nCmdShow );
 int GetCmdShow( HWND hWnd );
 
-static BOOL BES_ShowWindow( HWND hCurWnd, HWND hwnd, int iShow );
+
 #define BES_ERROR                -600
 
 #define BES_DELETE_KEY           -100
@@ -505,17 +512,19 @@ int ParseArgs(
 	TCHAR * lpszTargetLongExe,
 	TCHAR * lpszOptions,
 	bool fAllowMoreThan99,
-	int * aiParams = NULL );
+	int * aiParams = NULL,
+	int * piMode = NULL );
 
 ptrdiff_t ParseJobList( const TCHAR * lpszCmdLine,
 					   TCHAR ** arTargetPaths,
 					   int * arSliders,
 					   int * arCycle,
 					   int * arDelay,
+					   int * arMode,
 					   ptrdiff_t array_len,
 					   bool fAllowMoreThan99 );
 
-BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreThan99, TARGETINFO * ti );
+int HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreThan99, TARGETINFO * ti );
 
 
 

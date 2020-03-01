@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="shift_jis"?>
+<?xml version="1.0" encoding="utf-8"?>
 <VisualStudioProject
 	ProjectType="Visual C++"
 	Version="9.00"
@@ -403,7 +403,7 @@
 				FavorSizeOrSpeed="1"
 				OmitFramePointers="true"
 				WholeProgramOptimization="false"
-				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;UNICODE;DPSAPI_VERSION=1;_WIN32_WINNT=0x0500;"
+				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;UNICODE;DPSAPI_VERSION=1;_WIN32_WINNT=0x0500;SSE2"
 				StringPooling="true"
 				ExceptionHandling="0"
 				BasicRuntimeChecks="0"

@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2017 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -12,6 +12,7 @@ extern HWND g_hWnd;
 extern HWND g_hSettingsDlg;
 extern HANDLE hSemaphore[ MAX_SLOTS ];
 extern TCHAR * ppszStatus[ 18 ];
+extern PATHINFO g_arPathInfo[ MAX_WATCH ];
 
 //extern volatile DWORD g_dwTargetProcessId[ MAX_SLOTS ];
 extern volatile int g_Slider[ MAX_SLOTS ];
@@ -41,7 +42,7 @@ unsigned __stdcall Hack( void * pv )
 	QueryPerformanceCounter(&li);
 	QueryPerformanceFrequency(&freq);
 	TCHAR s[100];
-	_sntprintf_s(s,_countof(s),_TRUNCATE,_T("0x%x\t<<Hack Thread[%d]>>\t%f\n"),
+	_sntprintf_s(s,_countof(s),_TRUNCATE,_T("0x%x\t<<Hack Thread[slot=%u]>>\t%f\n"),
 			GetCurrentThreadId(),
 			((TARGETINFO*)pv)->slotid,
 			(double) li.QuadPart / freq.QuadPart * 1000.0);
@@ -66,7 +67,8 @@ static int Hack_Worker( void * pv )
 	if( ! pv ) return 0xFFFF;
 
 	TARGETINFO& ti = *(TARGETINFO*) pv;
-	const int iMyId = ti.slotid;
+	const int iMyId = (int) ti.slotid;
+	const int mode = ( ti.mode == 0 ) ? 0 : DEF_MODE ;
 
 	if( iMyId < 0 || MAX_SLOTS <= iMyId || iMyId == 3 )
 	{
@@ -174,7 +176,7 @@ static int Hack_Worker( void * pv )
 	{
 		bPrivilege = EnableDebugPrivilege( &hToken, &dwPrevAttributes );
 		
-
+		// PROCESS_ALL_ACCESS for (NTDDI_VERSION >= NTDDI_VISTA)
 		hProcess = OpenProcess(	STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFFF,
 								FALSE, dwTargetProcessId );
 
@@ -185,6 +187,8 @@ static int Hack_Worker( void * pv )
 		else
 		{
 			WriteDebugLog( _T("OpenProcess 0xFFFF failed") );
+
+			// PROCESS_ALL_ACCESS for (NTDDI_VERSION < NTDDI_VISTA)
 			hProcess = OpenProcess(	STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFF,
 								FALSE, dwTargetProcessId );
 
@@ -325,22 +329,24 @@ static int Hack_Worker( void * pv )
 	
 	for( DWORD dwOuterLoops = 0; g_bHack[ iMyId ]; ++dwOuterLoops )
 	{
-		//***
 		ptrdiff_t numOfThreads = 0;
-//		DWORD * pThreadIDs = ListProcessThreads_Alloc( dwTargetProcessId, numOfThreads );
-		DWORD * pThreadIDs = AllocThreadList( dwTargetProcessId, numOfThreads );
+		DWORD * pThreadIDs = NULL;
 
-		if( ! pThreadIDs ) break;
+		if( mode == 0 ) {
+			pThreadIDs = AllocThreadList( dwTargetProcessId, numOfThreads );
+			if( ! pThreadIDs ) break;
+		}
 
-		if( numOfThreads == 0 )
+		if( mode == 0 && numOfThreads == 0 || mode == 1 && !ProcessExists( dwTargetProcessId ) )
 		{
 			if( iMyId < 3 )
 			{
 				GetLocalTime( &st );
 				_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus, _T("Process ID = %lu"),
 							dwTargetProcessId );
-				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus, _T("%02d:%02d:%02d No threads"),
-							(int) st.wHour, (int) st.wMinute, (int) st.wSecond );
+				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus, _T("%02d:%02d:%02d %s"),
+							(int) st.wHour, (int) st.wMinute, (int) st.wSecond,
+							( mode == 1 ? _T("Process missing") : _T("No threads") ) );
 			}
 			
 			ti.dwProcessId = TARGET_PID_NOT_SET;
@@ -366,7 +372,7 @@ static int Hack_Worker( void * pv )
 
 			PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, TARGET_MISSING );
 
-			HeapFree( GetProcessHeap(), 0, pThreadIDs );
+			if( pThreadIDs ) HeapFree( GetProcessHeap(), 0, pThreadIDs );
 			if( hToken )
 			{
 				if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
@@ -401,10 +407,12 @@ static int Hack_Worker( void * pv )
 
 		if( iMyId < 3 )
 		{
-			_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus,
-						_T( "Process ID = %lu [ %d Thread%s ]" ),
-						dwTargetProcessId, (int) numOfThreads,
-						( numOfThreads != 1 ) ? _T("s") : _T("") );
+			if( mode == 0 )	_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus,
+								_T( "Process ID = %lu [ %ld Thread%s ] / Mode 0" ),
+								dwTargetProcessId, (long) numOfThreads, ( numOfThreads != 1 ? _T("s") : _T("") ) );
+			else _stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus,
+								_T( "Process ID = %lu / Mode %d" ),
+								dwTargetProcessId, mode );
 		}
 		GetLocalTime( &st );
 
@@ -436,152 +444,161 @@ static int Hack_Worker( void * pv )
 		}
 
 		// NULL if unused (HEAP_ZERO_MEMORY)
-		HANDLE * pThreadHandles = (HANDLE *) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
-															sizeof(HANDLE) * numOfThreads );
-		if( ! pThreadHandles )
+		HANDLE * pThreadHandles = NULL;
+		
+		if( mode == 0 )
 		{
-			HeapFree( GetProcessHeap(), 0, pThreadIDs );
-			break;
+			pThreadHandles = (HANDLE *) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY,
+															sizeof(HANDLE) * numOfThreads );
+			if( ! pThreadHandles )
+			{
+				if( pThreadIDs ) HeapFree( GetProcessHeap(), 0, pThreadIDs );
+				break;
+			}
 		}
 
 //#define A_M 1
 #undef A_M
-		ptrdiff_t numOfOpenedThreads = 0;
-		for( i = 0; i < numOfThreads; ++i )
+		if( mode == 0 )
 		{
-			pThreadHandles[ i ] = OpenThread( STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFFF,
-											FALSE, pThreadIDs[ i ] );
-			
-			if( pThreadHandles[ i ] )
+			ptrdiff_t numOfOpenedThreads = 0;
+			for( i = 0; i < numOfThreads; ++i )
 			{
-				//if(i==0) WriteDebugLog(_T("0xFFFF OK"));
-			}
-			else
-			{
-				//if(i==0) WriteDebugLog(_T("0xFFFF failed"));
+				pThreadHandles[ i ] = OpenThread( STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFFF,
+												FALSE, pThreadIDs[ i ] );
 				
-				pThreadHandles[ i ] = OpenThread( STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x3FF,
-											FALSE, pThreadIDs[ i ] );
+				if( pThreadHandles[ i ] )
+				{
+					//if(i==0) WriteDebugLog(_T("0xFFFF OK"));
+				}
+				else
+				{
+					//if(i==0) WriteDebugLog(_T("0xFFFF failed"));
+					
+					pThreadHandles[ i ] = OpenThread( STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x3FF,
+												FALSE, pThreadIDs[ i ] );
+
+					if( pThreadHandles[ i ] )
+					{
+						//if(i==0) WriteDebugLog(_T("0x3FF OK"));
+					}
+					else
+					{
+						//if(i==0) WriteDebugLog(_T("0x3FF failed"));
+						pThreadHandles[ i ] = OpenThread( THREAD_SUSPEND_RESUME, FALSE, pThreadIDs[ i ] );
+					}
+				}
 
 				if( pThreadHandles[ i ] )
 				{
-					//if(i==0) WriteDebugLog(_T("0x3FF OK"));
+					++numOfOpenedThreads;
 				}
 				else
 				{
-					//if(i==0) WriteDebugLog(_T("0x3FF failed"));
-					pThreadHandles[ i ] = OpenThread( THREAD_SUSPEND_RESUME, FALSE, pThreadIDs[ i ] );
+					_stprintf_s( msg, _countof(msg),
+								_T( "[!] Target #%d : OpenThread failed: Thread #%03d, ThreadId 0x%08lX" ),
+								iMyId < 3 ? iMyId + 1 : iMyId,
+								(int) i + 1,
+								pThreadIDs[ i ] );
+					WriteDebugLog( msg );
 				}
 			}
 
-			if( pThreadHandles[ i ] )
+			if( numOfOpenedThreads == 0
+				||
+				numOfOpenedThreads != numOfThreads && iOpenThreadRetry > 10
+				||
+				iSuspendThreadRetry > 100
+				||
+				iResumeThreadRetry > 50 )
 			{
-				++numOfOpenedThreads;
+				for( i = 0; i < numOfThreads; ++i )
+					if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
+
+				GetLocalTime( &st );
+				if( iMyId < 3 )
+				{
+					_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
+								_T("%02d:%02d:%02d %s Error"),
+								(int) st.wHour, (int) st.wMinute, (int) st.wSecond,
+								(iResumeThreadRetry > 50) ? _T("ResumeThread")
+								: (iSuspendThreadRetry > 100) ? _T("SuspendThread")
+								: _T("OpenThread") );
+
+					WriteDebugLog( ppszStatus[ 3 + iMyId * 4 ] );
+				}
+				WriteDebugLog( TEXT( "### Giving up... ###" ) );
+
+				ti.dwProcessId = TARGET_PID_NOT_SET;
+	//			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
+
+				if( bPrioritySet ) SetPriorityClass( hProcess, dwOldPriority );
+				CloseHandle( hProcess );
+
+				UpdateStatus( g_hWnd ); // needed ?
+
+				if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL ) )
+				{
+					_stprintf_s( msg, _countof(msg), 
+								_T( "* THREAD_NOT_OPENED #%d : ReleaseSemaphore in Hack()" ),
+								iMyId < 3 ? iMyId + 1 : iMyId );
+					WriteDebugLog( msg );
+				}
+
+				int iRetVal = ! ProcessExists( dwTargetProcessId ) /*(PathToProcessID( szEnemyPath ) == (DWORD) -1)*/
+									? TARGET_MISSING : THREAD_NOT_OPENED ;
+
+				if( iRetVal == THREAD_NOT_OPENED && iMyId == 2 && g_bHack[ 3 ] == TRUE )
+				{
+					Sleep( 3000 );
+					if( ! ProcessExists( dwTargetProcessId ) /*PathToProcessID( szEnemyPath ) == (DWORD) -1*/ )
+					{
+						iRetVal = TARGET_MISSING;
+					}
+					else
+					{
+						g_bHack[ 3 ] = UNWATCH_NOW;
+						g_bHack[ 2 ] = FALSE;
+					}
+				}
+				
+				PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, iRetVal );
+
+				InvalidateRect( g_hWnd, NULL, TRUE );
+
+				HeapFree( GetProcessHeap(), 0, pThreadHandles );
+				HeapFree( GetProcessHeap(), 0, pThreadIDs );
+
+				if( hToken )
+				{
+					if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
+					CloseHandle( hToken );
+				}
+
+				return iRetVal;
 			}
-			else
+			else if( numOfOpenedThreads != numOfThreads )
 			{
-				_stprintf_s( msg, _countof(msg),
-							_T( "[!] Target #%d : OpenThread failed: Thread #%03d, ThreadId 0x%08lX" ),
-							iMyId < 3 ? iMyId + 1 : iMyId,
-							(int) i + 1,
-							pThreadIDs[ i ] );
-				WriteDebugLog( msg );
-			}
-		}
+				for( i = 0; i < numOfThreads; ++i )
+					if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
 
-		if( numOfOpenedThreads == 0
-			||
-			numOfOpenedThreads != numOfThreads && iOpenThreadRetry > 10
-			||
-			iSuspendThreadRetry > 100
-			||
-			iResumeThreadRetry > 50 )
-		{
-			for( i = 0; i < numOfThreads; ++i )
-				if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
-
-			GetLocalTime( &st );
-			if( iMyId < 3 )
-			{
-				_stprintf_s( ppszStatus[ 3 + iMyId * 4 ], cchStatus,
-							_T("%02d:%02d:%02d %s Error"),
-							(int) st.wHour, (int) st.wMinute, (int) st.wSecond,
-							(iResumeThreadRetry > 50) ? _T("ResumeThread")
-							: (iSuspendThreadRetry > 100) ? _T("SuspendThread")
-							: _T("OpenThread") );
-
-				WriteDebugLog( ppszStatus[ 3 + iMyId * 4 ] );
-			}
-			WriteDebugLog( TEXT( "### Giving up... ###" ) );
-
-			ti.dwProcessId = TARGET_PID_NOT_SET;
-//			g_dwTargetProcessId[ iMyId ] = TARGET_PID_NOT_SET;
-
-			if( bPrioritySet ) SetPriorityClass( hProcess, dwOldPriority );
-			CloseHandle( hProcess );
-
-			UpdateStatus( g_hWnd ); // needed ?
-
-			if( ReleaseSemaphore( hSemaphore[ iMyId ], 1L, NULL ) )
-			{
+				++iOpenThreadRetry;
+				
 				_stprintf_s( msg, _countof(msg), 
-							_T( "* THREAD_NOT_OPENED #%d : ReleaseSemaphore in Hack()" ),
-							iMyId < 3 ? iMyId + 1 : iMyId );
+							_T( "@ Couldn't open some threads: Retrying #%d..." ), iOpenThreadRetry );
 				WriteDebugLog( msg );
+			
+				HeapFree( GetProcessHeap(), 0, pThreadHandles );
+				HeapFree( GetProcessHeap(), 0, pThreadIDs );
+				
+				Sleep( 100 );
+				CachedList_Refresh( 100 );
+				continue;
 			}
 
-			int iRetVal = ! ProcessExists( dwTargetProcessId ) /*(PathToProcessID( szEnemyPath ) == (DWORD) -1)*/
-								? TARGET_MISSING : THREAD_NOT_OPENED ;
+			iOpenThreadRetry = 0;
 
-			if( iRetVal == THREAD_NOT_OPENED && iMyId == 2 && g_bHack[ 3 ] == TRUE )
-			{
-				Sleep( 3000 );
-				if( ! ProcessExists( dwTargetProcessId ) /*PathToProcessID( szEnemyPath ) == (DWORD) -1*/ )
-				{
-					iRetVal = TARGET_MISSING;
-				}
-				else
-				{
-					g_bHack[ 3 ] = UNWATCH_NOW;
-					g_bHack[ 2 ] = FALSE;
-				}
-			}
-			
-			PostMessage( g_hWnd, WM_USER_STOP, (WPARAM) iMyId, iRetVal );
-
-			InvalidateRect( g_hWnd, NULL, TRUE );
-
-			HeapFree( GetProcessHeap(), 0, pThreadHandles );
-			HeapFree( GetProcessHeap(), 0, pThreadIDs );
-
-			if( hToken )
-			{
-				if( bPrivilege ) AdjustDebugPrivilege( hToken, FALSE, &dwPrevAttributes );
-				CloseHandle( hToken );
-			}
-
-			return iRetVal;
-		}
-		else if( numOfOpenedThreads != numOfThreads )
-		{
-			for( i = 0; i < numOfThreads; ++i )
-				if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
-
-			++iOpenThreadRetry;
-			
-			_stprintf_s( msg, _countof(msg), 
-						_T( "@ Couldn't open some threads: Retrying #%d..." ), iOpenThreadRetry );
-			WriteDebugLog( msg );
-		
-			HeapFree( GetProcessHeap(), 0, pThreadHandles );
-			HeapFree( GetProcessHeap(), 0, pThreadIDs );
-			
-			Sleep( 100 );
-			CachedList_Refresh( 100 );
-			continue;
-		}
-
-		iOpenThreadRetry = 0;
+		} // if mode == 0
 
 #if 0
 //		const bool fActive1 = ( g_bHack[ 0 ] == TRUE );
@@ -641,16 +658,13 @@ static int Hack_Worker( void * pv )
 		DWORD sElapsed = 0;
 		unsigned numOfReports = 0;
 
-#ifdef _DEBUG
 		DWORD dwInnerLoops = 0;
-#endif
 
 		while( msElapsed < 10 * 1024 ) // about 10 seconds
 		//while( msElapsed < 4 * 1024 ) // about 4 seconds
 		{
-#ifdef _DEBUG
 			++dwInnerLoops;
-#endif
+
 			DWORD TimeRed = 0;
 			DWORD TimeGreen = 100;
 			UINT msUnit = UNIT_DEF;
@@ -730,26 +744,40 @@ static int Hack_Worker( void * pv )
 								GetLastError() );
 					WriteDebugLog( msg );
 				}
-#else
-				for( i = 0; i < numOfThreads; ++i )
-				{
-					if( pThreadHandles[ i ] )
-					{
-						if( SuspendThread( pThreadHandles[ i ] ) == (DWORD) -1 )
-						{
-							errorflags |= ERR_SUSPEND;
-							_stprintf_s( msg, _countof(msg),
-								_T( "Target #%d : SuspendThread failed (Thread #%03d) : Retry=%d : err=%lu" ),
-										iMyId < 3 ? iMyId + 1 : iMyId,
-										(int) i + 1,
-										iSuspendThreadRetry,
-										GetLastError() );
-							WriteDebugLog( msg );
-						}
-						else fSuspended = true;
-					}
-				}
 #endif
+
+				if( mode == 1 )
+				{
+					SetLastError( 0 );
+					BOOL bDAP = DebugActiveProcess( dwTargetProcessId );
+					if( dwInnerLoops == 1 || ! bDAP ) {
+						_stprintf_s( msg, _countof(msg), _T( "DebugActiveProcess(%lu)=%d (err=%lu)" ), dwTargetProcessId, bDAP, GetLastError() );
+						WriteDebugLog( msg );
+					}
+					if( bDAP ) fSuspended = true;
+					else errorflags |= ERR_SUSPEND;
+				}
+				else // mode = 0
+				{
+					for( i = 0; i < numOfThreads; ++i )
+					{
+						if( pThreadHandles[ i ] )
+						{
+							if( SuspendThread( pThreadHandles[ i ] ) == (DWORD) -1 )
+							{
+								errorflags |= ERR_SUSPEND;
+								_stprintf_s( msg, _countof(msg),
+									_T( "Target #%d : SuspendThread failed (Thread #%03d) : Retry=%d : err=%lu" ),
+											iMyId < 3 ? iMyId + 1 : iMyId,
+											(int) i + 1,
+											iSuspendThreadRetry,
+											GetLastError() );
+								WriteDebugLog( msg );
+							}
+							else fSuspended = true;
+						}
+					}
+				} // mode = 0
 			}
 
 			if( errorflags & ERR_SUSPEND )
@@ -788,24 +816,38 @@ static int Hack_Worker( void * pv )
 									GetLastError() );
 						WriteDebugLog( msg );
 				}
-#else
-				for( i = 0; i < numOfThreads; ++i )
+#endif
+
+				if( mode == 1 )
 				{
-					if( pThreadHandles[ i ] && ResumeThread( pThreadHandles[ i ] ) == (DWORD) -1 )
-					{
-						errorflags |= ERR_RESUME;
-						_stprintf_s( msg, _countof(msg),
-									_T("Target #%d : ResumeThread failed: Thread #%03d, ")
-									_T("ThreadId 0x%08lX, iResumeThreadRetry=%d : err=%lu"),
-									iMyId < 3 ? iMyId + 1 : iMyId,
-									(int) i + 1,
-									pThreadIDs[ i ],
-									iResumeThreadRetry,
-									GetLastError() );
+					SetLastError( 0 );
+					BOOL bDAPS = DebugActiveProcessStop( dwTargetProcessId );
+					if( dwInnerLoops == 1 || ! bDAPS ) {
+						_stprintf_s( msg, _countof(msg), _T( "DebugActiveProcessStop(%lu)=%d (err=%lu)" ), dwTargetProcessId, bDAPS, GetLastError() );
 						WriteDebugLog( msg );
 					}
+					if( ! bDAPS ) errorflags |= ERR_RESUME;
 				}
-#endif
+				else // mode = 0
+				{
+					for( i = 0; i < numOfThreads; ++i )
+					{
+						if( pThreadHandles[ i ] && ResumeThread( pThreadHandles[ i ] ) == (DWORD) -1 )
+						{
+							errorflags |= ERR_RESUME;
+							_stprintf_s( msg, _countof(msg),
+										_T("Target #%d : ResumeThread failed: Thread #%03d, ")
+										_T("ThreadId 0x%08lX, iResumeThreadRetry=%d : err=%lu"),
+										iMyId < 3 ? iMyId + 1 : iMyId,
+										(int) i + 1,
+										pThreadIDs[ i ],
+										iResumeThreadRetry,
+										GetLastError() );
+							WriteDebugLog( msg );
+						}
+					}
+				}
+
 				fSuspended = false;
 			}
 
@@ -875,8 +917,8 @@ static int Hack_Worker( void * pv )
 		for( i = 0; i < numOfThreads; ++i )
 			if( pThreadHandles[ i ] ) CloseHandle( pThreadHandles[ i ] );
 
-		HeapFree( GetProcessHeap(), 0, pThreadHandles );
-		HeapFree( GetProcessHeap(), 0, pThreadIDs );
+		if( pThreadHandles ) HeapFree( GetProcessHeap(), 0, pThreadHandles );
+		if( pThreadIDs ) HeapFree( GetProcessHeap(), 0, pThreadIDs );
 	}
 
 	if( iMyId < 3 )
@@ -987,40 +1029,43 @@ static void _settings_init( HWND hDlg, TARGETINFO * ti )
 	TCHAR tmpstr[ 32 ];
 	for( int i = 0; i < 3; i++ )
 	{
+		int iSlider = g_Slider[ i ];
 		const TCHAR * path = ti[ i ].disp_path ? ti[ i ].disp_path
 									: ti[ i ].lpPath ? ti[ i ].lpPath
 									: TARGET_UNDEF ;
-#if 0 //20160922
-		if( i == 2 && g_bHack[ 3 ] )
+//#if 0 //20160922
+//#if 1 //20190317
+#ifdef COLD_WATCH_SLIDER //20190322
+		if( i == 2 && g_bHack[ 3 ] && ! g_bHack[ 2 ] ) // watching-but-not-limiting
 		{
 			TCHAR szText[ CCHPATH + 20 ];
 			_sntprintf_s( szText, _countof(szText), _TRUNCATE, _T("%s (Watching)"), path );
 			SetDlgItemText( hDlg, IDC_EDIT_TARGET1 + 2, szText );
 
-		SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + 2, TEXT( "(Watching)" ) );
-		EnableDlgItem( hDlg, IDC_BUTTON_STOP1 + 2, FALSE );
-		EnableDlgItem( hDlg, IDC_SLIDER1 + 2, TRUE );
-		EnableDlgItem( hDlg, IDC_TEXT_PERCENT1 + 2, TRUE );
+			SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + 2, TEXT( "(Watching)" ) );
+			EnableDlgItem( hDlg, IDC_BUTTON_STOP1 + 2, FALSE );
+			EnableDlgItem( hDlg, IDC_SLIDER1 + 2, TRUE );  // enable IDC_SLIDER3
+			EnableDlgItem( hDlg, IDC_TEXT_PERCENT1 + 2, TRUE );
+			iSlider = g_arPathInfo[ 0 ].slider; // read this from the watch-list, instead of from g_Slider[ 2 ]
 		}
 		else
 #endif
 		{
 			SetDlgItemText( hDlg, IDC_EDIT_TARGET1 + i,	path );
-		_stprintf_s( tmpstr, _countof(tmpstr), _T( "%s #&%d" ),
+			_stprintf_s( tmpstr, _countof(tmpstr), _T( "%s #&%d" ),
 					g_bHack[ i ] ? _T( "Unlimit" ) : _T( "Limit" ), i + 1 );
-		SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + i, tmpstr );
-		EnableDlgItem( hDlg, IDC_BUTTON_STOP1 + i, 
+			SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + i, tmpstr );
+			EnableDlgItem( hDlg, IDC_BUTTON_STOP1 + i, 
 						( ti[ i ].dwProcessId != TARGET_PID_NOT_SET ) );
-		EnableDlgItem( hDlg, IDC_SLIDER1 + i, 
+			EnableDlgItem( hDlg, IDC_SLIDER1 + i, 
 						( ti[ i ].dwProcessId != TARGET_PID_NOT_SET ) );
-		EnableDlgItem( hDlg, IDC_TEXT_PERCENT1 + i, 
+			EnableDlgItem( hDlg, IDC_TEXT_PERCENT1 + i, 
 						( ti[ i ].dwProcessId != TARGET_PID_NOT_SET ) );
 		}
 
 		SendDlgItemMessage( hDlg, IDC_SLIDER1 + i, TBM_SETRANGE, TRUE, MAKELONG( SLIDER_MIN, iMax ) );
 		SendDlgItemMessage( hDlg, IDC_SLIDER1 + i, TBM_SETPAGESIZE, 0, 5 );
 		
-		const int iSlider = g_Slider[ i ];
 		SendDlgItemMessage( hDlg, IDC_SLIDER1 + i, TBM_SETPOS, TRUE, iSlider );
 		SetSliderText( hDlg, IDC_TEXT_PERCENT1 + i , iSlider );
 	}
@@ -1205,6 +1250,11 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 					lSlider = SLIDER_DEF;
 
 				g_Slider[ k ] = (int) lSlider;
+
+#ifdef COLD_WATCH_SLIDER
+				if( k == 2 && g_bHack[ 3 ] && ! g_bHack[ 2 ] ) // watching-but-not-limiting
+					g_arPathInfo[ 0 ].slider = (int) lSlider;  // IDC_SLIDER3 (=IDC_SLIDER1 + 2) has been moved
+#endif
 
 				TCHAR strPercent[ 16 ] = _T("");
 				GetPercentageString( lSlider, strPercent, _countof(strPercent) );

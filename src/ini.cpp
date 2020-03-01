@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2014 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -21,7 +21,7 @@ extern volatile UINT g_uUnit;
 extern bool g_fRealTime;
 extern bool g_fLowerPriv;
 
-
+static UINT64 ReadIni_Time( const TCHAR * pExe );
 static void WriteIni_Worker( TCHAR * lpBuffer, size_t cchBuffer, 
 							bool fFriend, const TCHAR * strIniPath );
 static void PathToExe_InPlace( TCHAR * pszPath );
@@ -244,14 +244,99 @@ void ReadIni( BOOL& bAllowMulti, BOOL& bLogging )
 
 }
 
-BOOL WriteIni( bool fRealTime )
+BOOL UpdateIFF_Ini( BOOL bCleanSliderSection )
 {
 	// The maximum profile section size is 32,767 characters. Our cchBuffer is 133,120 cch.
-	const size_t cchBuffer = CCHPATH * MAX_ENEMY_CNT;
-	TCHAR * lpBuffer = (TCHAR*) HeapAlloc( GetProcessHeap(), 0L, cchBuffer * sizeof(TCHAR) );
-	if( ! lpBuffer )
-		return FALSE;
+	size_t cchBuffer = CCHPATH * MAX_ENEMY_CNT;
+	TCHAR * lpBuffer = (TCHAR*) HeapAlloc( GetProcessHeap(), 0, cchBuffer * sizeof(TCHAR) );
+	if( ! lpBuffer ) return FALSE;
 
+	const TCHAR * strIniPath = GetIniPath();
+	WriteIni_Worker( lpBuffer, cchBuffer, false, strIniPath );
+	WriteIni_Worker( lpBuffer, cchBuffer, true, strIniPath );
+	HeapFree( GetProcessHeap(), 0, lpBuffer );
+	lpBuffer = NULL;
+
+	// 2019-05-23 Resave the [Time] section and delete "unknown" entries (not enemy nor friend).
+	const ptrdiff_t cEntries = g_numOfEnemies + g_numOfFriends;
+	cchBuffer = (size_t)( cEntries * ( CCHPATH + 64 ) );
+	lpBuffer = (TCHAR*) HeapAlloc( GetProcessHeap(), 0, cchBuffer * sizeof(TCHAR) );
+
+	if( ! lpBuffer ) return FALSE;
+
+	TCHAR * ptr = lpBuffer;
+	TCHAR szKeyName[ 64 ];
+	TCHAR szExe[ CCHPATH ];
+	UINT64 u64;
+	int icch;
+	BOOL bOK = TRUE;
+
+	for( ptrdiff_t i = 0; i < g_numOfEnemies && bOK; ++i )
+	{
+		_stprintf_s( szKeyName, _countof(szKeyName), _T("Enemy%d"), (int) i );
+		if( GetPrivateProfileString( TEXT("Enemy"), szKeyName, NULL, szExe, CCHPATH, strIniPath ) )
+		{
+			u64 = ReadIni_Time( szExe );
+			icch = _stprintf_s( ptr, cchBuffer - ( ptr - lpBuffer ), _T("%s=%I64u"), szExe, u64 );
+			if( 0 < icch ) ptr += ( icch + 1 );
+			else bOK = FALSE;
+		}
+	}
+
+	for( ptrdiff_t i = 0; i < g_numOfFriends && bOK; ++i )
+	{
+		_stprintf_s( szKeyName, _countof(szKeyName), _T("Friend%d"), (int) i );
+		if( GetPrivateProfileString( TEXT("Friend"), szKeyName, NULL, szExe, CCHPATH, strIniPath ) )
+		{
+			u64 = ReadIni_Time( szExe );
+			icch = _stprintf_s( ptr, cchBuffer - ( ptr - lpBuffer ), _T("%s=%I64u"), szExe, u64 );
+			if( 0 < icch ) ptr += ( icch + 1 );
+			else bOK = FALSE;
+		}
+	}
+
+	if( bOK )
+	{
+		if( cchBuffer - ( ptr - lpBuffer ) >= 2 )
+		{
+			ptr[ 0 ] = _T('\0');
+			ptr[ 1 ] = _T('\0');
+			bOK = WritePrivateProfileSection( TEXT("Time"), lpBuffer, strIniPath );
+		}
+		else bOK = FALSE;
+	}
+
+	HeapFree( GetProcessHeap(), 0, lpBuffer );
+	lpBuffer = NULL;
+
+	if( ! bCleanSliderSection || ! bOK ) return bOK;
+
+	// Resave the [Slider] section, deleting non-timed entries (except the special key "Slider2").
+	cchBuffer = CCHPATH * MAX_ENEMY_CNT;
+	lpBuffer = (TCHAR*) HeapAlloc( GetProcessHeap(), 0, cchBuffer * sizeof(TCHAR) );
+	if( ! lpBuffer ) return FALSE;
+
+	DWORD dwcch = GetPrivateProfileString( TEXT("Slider"), NULL, NULL, lpBuffer, (DWORD) cchBuffer, strIniPath );
+	if( 0 < dwcch && dwcch < (DWORD) cchBuffer - 2 )
+	{
+		ptr = lpBuffer;
+		while( *ptr ) {
+			if( ReadIni_Time( ptr ) == (UINT64) 0 && _tcscmp( ptr, _T("Slider2") ) != 0 ) {
+				WritePrivateProfileString( TEXT("Slider"), ptr, NULL, strIniPath );
+			}
+			ptr += _tcslen( ptr ) + 1;
+		}
+	}
+	else bOK = FALSE;
+
+	HeapFree( GetProcessHeap(), 0, lpBuffer );
+	lpBuffer = NULL;
+
+	return bOK;
+}
+
+BOOL WriteIni( bool fRealTime )
+{
 	const TCHAR * strIniPath = GetIniPath();
 
 	// Delete old keys/values
@@ -261,7 +346,11 @@ BOOL WriteIni( bool fRealTime )
 	//WritePrivateProfileString( TEXT( "Slider" ), TEXT( "Slider2" ),	NULL, strIniPath );
 	//WritePrivateProfileString( TEXT( "Options" ), TEXT( "RealTime" ), NULL, strIniPath );
 
-	if( GetPrivateProfileInt( _T("Slider"), _T("Slider2"), 0, strIniPath ) < 1520 )
+	// The maximum profile section size is 32,767 characters. Our cchBuffer is 133,120 cch.
+	size_t cchBuffer = CCHPATH * MAX_ENEMY_CNT;
+	TCHAR * lpBuffer = (TCHAR*) HeapAlloc( GetProcessHeap(), 0L, cchBuffer * sizeof(TCHAR) );
+
+	if( lpBuffer && GetPrivateProfileInt( _T("Slider"), _T("Slider2"), 0, strIniPath ) < 1520 )
 	{
 		GetPrivateProfileSection( _T("Slider"), lpBuffer, cchBuffer, strIniPath );
 		TCHAR * line = lpBuffer;
@@ -289,6 +378,12 @@ BOOL WriteIni( bool fRealTime )
 		WritePrivateProfileString( _T("Slider"), _T("Slider2"), _T("1520"), strIniPath );
 	}
 
+	if( lpBuffer ) // no early return if ! lpBuffer - FIX @ 2019-05-20
+	{
+		HeapFree( GetProcessHeap(), 0L, lpBuffer );
+		lpBuffer = NULL;
+	}
+
 	// Read in ReadIni
 	WritePrivateProfileString(
 		TEXT( "Options" ), 
@@ -314,11 +409,22 @@ BOOL WriteIni( bool fRealTime )
 		lpszLangId,
 		strIniPath
 	);
-	
-	WriteIni_Worker( lpBuffer, cchBuffer, false, strIniPath );
-	WriteIni_Worker( lpBuffer, cchBuffer, true, strIniPath );
-	HeapFree( GetProcessHeap(), 0L, lpBuffer );
 
+	BOOL bRet = UpdateIFF_Ini( TRUE );
+
+	// to flush the cache - TODO: do we need this?
+	WritePrivateProfileString(
+		NULL,
+		NULL,
+		NULL,
+		strIniPath
+	);
+
+	return bRet;
+}
+
+void FreePointers( void )
+{
 	for( ptrdiff_t i = 0; i < MAX_ENEMY_CNT /*==MAX_FRIEND_CNT*/; ++i )
 	{
 		if( g_lpszEnemy[ i ] )
@@ -333,7 +439,6 @@ BOOL WriteIni( bool fRealTime )
 			g_lpszFriend[ i ] = NULL;
 		}
 	}
-	return TRUE;
 }
 
 static void _bes_lower( const TCHAR * p, TCHAR * q, ptrdiff_t cchBuf )
@@ -362,8 +467,16 @@ static void _bes_lower( const TCHAR * p, TCHAR * q, ptrdiff_t cchBuf )
 	*q = _T('\0');
 }
 
+
+static void GetCurrentTimeAsString( TCHAR * strTime, size_t cchTime ) {
+	FILETIME ft = {0};
+	GetSystemTimeAsFileTime( &ft );
+	_stprintf_s( strTime, cchTime, _T("%I64u"), 
+				(UINT64) ft.dwLowDateTime | (UINT64) ft.dwHighDateTime << 32 );
+}
+
 // v0.1.6.0 (20120427) : We only handle up to MAX_PROCESS_CNT (256) items.
-// Therefore, we should somehow forget about old friends/enemies.
+// Therefore, we should somehow forget old friends/enemies.
 // So, we remember how old they are.
 void WriteIni_Time( const TCHAR * pszPath )
 {
@@ -378,14 +491,9 @@ void WriteIni_Time( const TCHAR * pszPath )
 	TCHAR strExeNameLower[ CCHPATH ] = _T("");
 	_bes_lower( pExe, strExeNameLower, CCHPATH );
 
-	FILETIME ft = {0};
-	GetSystemTimeAsFileTime( &ft );
-	TCHAR strTime[ 64 ];
+	TCHAR strTime[ 64 ] = _T("");
+	GetCurrentTimeAsString( strTime, _countof(strTime) );
 	
-	_stprintf_s( strTime, _countof(strTime), 
-				_T("%I64u"), 
-				(UINT64) ft.dwLowDateTime | (UINT64) ft.dwHighDateTime << 32 );
-
 	WritePrivateProfileString(
 		TEXT( "Time" ), 
 		strExeNameLower,
@@ -393,20 +501,21 @@ void WriteIni_Time( const TCHAR * pszPath )
 		GetIniPath()
 	);
 }
-static INT64 ReadIni_Time( const TCHAR * pExe )
+static UINT64 ReadIni_Time( const TCHAR * pExe )
 {
-	TCHAR strExeNameLower[ MAX_PATH * 2 ];
-	_bes_lower( pExe, strExeNameLower, MAX_PATH * 2 );
+	TCHAR strExeNameLower[ CCHPATH ];
+	_bes_lower( pExe, strExeNameLower, CCHPATH );
 
 	TCHAR strTime[ 64 ] = _T("");
-	GetPrivateProfileString( _T("Time"), strExeNameLower, _T(""), strTime, 64, GetIniPath() );
+	GetPrivateProfileString( TEXT("Time"), strExeNameLower, TEXT("0"), 
+								strTime, (DWORD) _countof(strTime), GetIniPath() );
 	
-	// Technically, (UINT64) _tcstoui64 is better, but VC6 doesns't have it.
+	// Technically, _tcstoui64 is better, but VC6 doesns't have it.
 	// In reality, this should be just fine. At least we can go to the year 30827.
-	return _ttoi64( strTime );
+	return (UINT64) _ttoi64( strTime );
 }
 typedef struct tagItemSorter {
-	INT64 time;
+	UINT64 time;
 	int number;
 #ifdef _DEBUG
 	const TCHAR * lpsz;
@@ -459,8 +568,13 @@ static void WriteIni_Worker( TCHAR * lpBuffer, size_t cchBuffer,
 #if (MAX_ENEMY_CNT < 256) || (MAX_FRIEND_CNT != MAX_ENEMY_CNT)
 # error MAX_ENEMY_CNT must be 256 or greater, and equal to MAX_FRIEND_CNT
 #endif
+
 		// Save only a limited number of items after sorted
+#ifdef _DEBUG
+		const ptrdiff_t numOfItemsToSave = __min( 7, cItems );
+#else
 		const ptrdiff_t numOfItemsToSave = __min( MAX_ENEMY_CNT - 56, cItems );
+#endif
 
 		//_CrtSetDebugFillThreshold(0);
 		for( i = 0; i < numOfItemsToSave; ++i )
@@ -479,20 +593,13 @@ static void WriteIni_Worker( TCHAR * lpBuffer, size_t cchBuffer,
 
 		HeapFree( GetProcessHeap(), 0L, sorter );
 	}
-	
-	if( ptr < lpBuffer + cchBuffer )
+
+	if( cchBuffer - ( ptr - lpBuffer ) >= 2 )
 	{
 		ptr[ 0 ] = _T('\0'); // additional NUL (after the previous NUL)
-		if( ptr == lpBuffer )
-			ptr[ 1 ] = _T('\0'); // if the previous NUL doesn't exist
+		ptr[ 1 ] = _T('\0'); // in case the previous NUL doesn't exist (ptr == lpBuffer)
+		WritePrivateProfileSection( strSection, lpBuffer, strIniPath );
 	}
-	else
-	{
-		lpBuffer[ cchBuffer - 2 ] = _T('\0');
-		lpBuffer[ cchBuffer - 1 ] = _T('\0');
-	}
-	
-	WritePrivateProfileSection( strSection, lpBuffer, strIniPath );
 }
 
 
@@ -506,7 +613,9 @@ void SetSliderIni( const TCHAR * pszString, LRESULT iSlider )
 	TCHAR strExeName[ CCHPATH ] = _T( "" );
 // +1.1b7
 	PathToExe( pszString, strExeName, _countof(strExeName) );
-	if( ! strExeName[ 0 ] || _tcschr( strExeName, _T('*') ) ) return;
+	if( strExeName[ 0 ] == _T('\0')
+		|| _tcschr( strExeName, _T('*') ) != NULL
+		|| _tcsnicmp( strExeName, _T("pid:"), 4 ) == 0 ) return;
 
 #if 0 //!defined( _UNICODE ) // ANSIFIX6
 	if( strlen( strExeName ) >= 19 )
@@ -531,7 +640,7 @@ void SetSliderIni( const TCHAR * pszString, LRESULT iSlider )
 		strIniPath
 	);
 
-	// to flush the cache
+	// to flush the cache - TODO: do we need this?
 	WritePrivateProfileString(
 		NULL,
 		NULL,
@@ -542,8 +651,8 @@ void SetSliderIni( const TCHAR * pszString, LRESULT iSlider )
 
 int GetSliderIni( LPCTSTR lpszTargetPath, HWND hWnd, int iDef )
 {
-	TCHAR strExeName[ MAX_PATH * 2 ];
-	TCHAR strExeNameLower[ MAX_PATH * 2 ];
+	TCHAR strExeName[ CCHPATH ] = _T("");
+	TCHAR strExeNameLower[ CCHPATH ] = _T("");
 
 	if( iDef < SLIDER_MIN || SLIDER_MAX < iDef ) iDef = SLIDER_DEF;
 
@@ -556,22 +665,14 @@ int GetSliderIni( LPCTSTR lpszTargetPath, HWND hWnd, int iDef )
 	if( strlen( strExeName ) >= 19 )
 	{
 		strExeName[ 15 ] = '\0';
-		PathToExeEx( strExeName, MAX_PATH * 2 );
+		PathToExeEx( strExeName, CCHPATH );
 	}
 #endif
 
-	_bes_lower( strExeName, strExeNameLower, MAX_PATH * 2 );
+	_bes_lower( strExeName, strExeNameLower, CCHPATH );
 
 	const TCHAR * strIniPath = GetIniPath();
-#if 0
-	// to flush the cache --- Just in case!
-	WritePrivateProfileString(
-		NULL,
-		NULL,
-		NULL,
-		strIniPath
-	);
-#endif
+
 	int iSlider = (int) GetPrivateProfileInt( TEXT( "Slider" ), strExeNameLower, iDef, strIniPath );
 	if( iSlider == 0 ) iSlider = 1; // for backward compat.
 	else if( iSlider < SLIDER_MIN || SLIDER_MAX < iSlider ) iSlider = iDef;

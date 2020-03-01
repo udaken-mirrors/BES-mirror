@@ -1,5 +1,5 @@
 //{{NO_DEPENDENCIES}}
-// Microsoft Developer Studio generated include file.
+// Microsoft Visual C++ generated include file.
 // Used by BattleEnc.rc
 //
 #define IDC_MYICON                      2
@@ -73,6 +73,15 @@
 #define IDC_SLIDER_BUTTON               1047
 #define IDC_GROUPBOX                    1048
 #define IDC_SLIDER_Q                    1049
+#define IDC_CHANGE_TITLE                1055
+#define IDC_RESTORE_TITLE               1056
+#define IDC_RESET_PREFIX                1057
+#define IDC_RADIO0                      1060
+#define IDC_RADIO_MODE0                 1060
+#define IDC_RADIO1                      1061
+#define IDC_RADIO_MODE1                 1061
+#define IDC_RADIO_LIMIT                 1062
+#define IDC_RADIO_WATCH                 1063
 #define IDM_MENU_BASE                   30000
 #define IDM_ABOUT                       30000
 #define IDM_ABOUT_SHORTCUTS             30001
@@ -132,7 +141,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        120
 #define _APS_NEXT_COMMAND_VALUE         30046
-#define _APS_NEXT_CONTROL_VALUE         1050
+#define _APS_NEXT_CONTROL_VALUE         1064
 #define _APS_NEXT_SYMED_VALUE           120
 #endif
 #endif

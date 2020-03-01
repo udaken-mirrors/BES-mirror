@@ -357,6 +357,10 @@ including %u thread"
 \r\n\r\nContinue?"
 #define S_QUESTION1_FRE "BES limitera l'utilisation du CPU pour le processus suivant. Confirmer ?"
 #define S_QUESTION2_FRE "BES limitera l'utilisation du CPU pour le processus suivant, et continuera de surveillerle fichier EXE apr\xc3""\xa8""s que le processus en cours soit termin\xc3""\xa9"". Confirmer ?"
+#undef S_QUESTION2_FRE
+//2019-03-01 based on the tr. by Jean-Paul
+#define S_QUESTION2_FRE "BES limitera l'utilisation du CPU pour toutes les instances (executions) courantes et futures du processus suivant. Confirmer ?"
+
 
 #define S_QUESTION1_SPA "BES limitara el uso del CPU para el siguiente proceso.\r\n\r\n\xc2""\xbf""Desea continuar?"
 #define S_QUESTION2_SPA "BES limitara el uso del CPU del siguiente proceso, y se mantendr\xc3""\xa1"" observando el archivo EXE aun despu\xc3""\xa9""s de que el proceso sea terminado.\r\n\r\n\xc2""\xbf""Desea continuar?"

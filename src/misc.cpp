@@ -90,6 +90,7 @@ HFONT GetFontForURL( HDC hdc, float font_size )
 
 INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
+	extern HWND g_hAboutDlg;
 	static RECT urlrect = { 90, 140, 320, 170 };
 	static HCURSOR hCursor[ 3 ];
 	static int iCursor = 0;
@@ -166,7 +167,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 #if defined(_M_IX86_FP) && (_M_IX86_FP == 2)
 #define CPU_ TEXT(" SSE2")
 #else
-#define CPU_ TEXT("")
+#define CPU_ TEXT(" No-SSE2")
 #endif
 
 #ifdef _UNICODE
@@ -301,6 +302,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			hCursor[ 2 ] = hCursor[ 1 ];
 			SetCursor( hCursor[ 0 ] );
 			PostMessage( hDlg, WM_USER_CAPTION, 0, 0 );
+			g_hAboutDlg = hDlg;
 			break;
 		}
 		
@@ -474,6 +476,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 		
 		case WM_DESTROY:
 		{
+			g_hAboutDlg = NULL;
 			SetFont( IDC_APP_NAME, NULL );
 			SetFont( IDC_DESCRIPTION, NULL );
 
@@ -508,13 +511,14 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 	return TRUE;
 }
 
-static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiParams );
+static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiParams, int * piMode );
 
 ptrdiff_t ParseJobList( const TCHAR * lpszCmdLine,
 					   TCHAR ** arTargetPaths,
 					   int * arSliders,
 					   int * arCycle,
 					   int * arDelay,
+					   int * arMode,
 					   ptrdiff_t array_len,
 					   bool fAllowMoreThan99 )
 {
@@ -582,9 +586,11 @@ ptrdiff_t ParseJobList( const TCHAR * lpszCmdLine,
 		else
 		{
 			int aiParams[ 2 ] = { 0, 0 };
-			arSliders[ num ] = get_slider_int( ptr, fAllowMoreThan99, &aiParams[ 0 ] );
+			int mode = DEF_MODE;
+			arSliders[ num ] = get_slider_int( ptr, fAllowMoreThan99, &aiParams[ 0 ], &mode );
 			arCycle[ num ] = aiParams[ 0 ];
 			arDelay[ num ] = aiParams[ 1 ];
+			arMode[ num ] = mode;
 			++num;
 		}
 	}
@@ -599,7 +605,8 @@ int ParseArgs(
 	TCHAR * lpszTargetLongExe,
 	TCHAR * lpszOptions,
 	bool fAllowMoreThan99,
-	int * aiParams )
+	int * aiParams,
+	int * piMode )
 {
 	if( ! lpszCmdLine )
 		return IGNORE_ARGV;
@@ -760,12 +767,12 @@ int ParseArgs(
 
 	int iSlider = -1;
 	if( *ptr ) // a number found after a space
-		iSlider = get_slider_int( ptr, fAllowMoreThan99, aiParams );
+		iSlider = get_slider_int( ptr, fAllowMoreThan99, aiParams, piMode );
 
 	return iSlider;
 }
 
-static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiParams )
+static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiParams, int * piMode )
 {
 	int iSlider = -1;
 /*
@@ -782,6 +789,7 @@ static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiPar
 	{
 		aiParams[ 0 ] = -1; // undefined/invalid
 		aiParams[ 1 ] = -1;
+		if( piMode ) *piMode = DEF_MODE;
 		if( *endptr == _T(';') )
 		{
 			if( _T('0') <= endptr[ 1 ] && endptr[ 1 ] <= _T('9') )
@@ -791,12 +799,20 @@ static int get_slider_int( const TCHAR * ptr, bool fAllowMoreThan99, int * aiPar
 				if( *endptr == _T(';') && _T('0') <= endptr[ 1 ] && endptr[ 1 ] <= _T('9') ) {
 					d = _tcstod( endptr + 1, &endptr );
 					if( DELAY_MIN <= d && d <= DELAY_MAX ) aiParams[ 1 ] = (int) d;
+					if( *endptr == _T(';') && piMode ) {
+						long l = _tcstol( endptr + 1, &endptr, 10 );
+						if( l == 0 || l == 1 ) *piMode = (int) l; 
+					}
 				}
 			}
 			else if( endptr[ 1 ] == _T(';') && _T('0') <= endptr[ 2 ] && endptr[ 2 ] <= _T('9') )
 			{
 				double d = _tcstod( endptr + 2, &endptr );
 				if( DELAY_MIN <= d && d <= DELAY_MAX ) aiParams[ 1 ] = (int) d;
+				if( *endptr == _T(';') && piMode ) {
+					long l = _tcstol( endptr + 1, &endptr, 10 );
+					if( l == 0 || l == 1 ) *piMode = (int) l; 
+				}
 			}
 		}
 	}
@@ -913,8 +929,6 @@ VOID AboutShortcuts( HWND hWnd )
 		TEXT( "[Esc]\t\t: Exit (when idle)\r\n" )
 		TEXT( "[X]\t\t: Exit (when idle)\r\n" )
 		TEXT( "\r\n" )
-		TEXT( "[L]\t\t: Show the Watch List\r\n" )
-		TEXT( "\r\n" )
 		TEXT( "[A]\t\t: About\r\n" )
 		TEXT( "[F1]\t\t: This Help (you can disable this shortcut)\r\n" )
 		TEXT( "[F2]\t\t: Commandline Help\r\n" )
@@ -941,7 +955,6 @@ void ShowWatchList( HWND hWnd ) // 2017-11-03
 	extern PATHINFO g_arPathInfo[ MAX_WATCH ];
 	extern ptrdiff_t g_nPathInfo;
 	extern HANDLE hReconSema;
-	extern volatile UINT g_uUnit;
 
 	const TCHAR * pszTitle = _T("BES Watch List");
 
@@ -963,28 +976,26 @@ void ShowWatchList( HWND hWnd ) // 2017-11-03
 		return;
 	}
 
-	const UINT uDefCycle = g_uUnit;
 	int icchWritten = 0;
 	ptrdiff_t i;
 	for( i = 0; i < nItems; ++i )
 	{
-		const size_t cch = _tcslen( g_arPathInfo[ i ].pszPath ) + 256;
+		const size_t cch = _tcslen( g_arPathInfo[ i ].pszPath ) + 150;
 		lppTmp[ i ] = TcharAlloc( cch );
 		if( ! lppTmp[ i ] ) break;
 
-		const UINT uCycle = g_arPathInfo[ i ].wCycle;
 		icchWritten += _sntprintf_s( lppTmp[ i ], cch, _TRUNCATE,
-									_T("[%d] %s\n\t-%d%% : Cycle=%u ms, Initial Delay=%u ms\n\n"),
+			_T("[%d] %s\n\t-%d%% : Cycle=%d : Delay=%d : Mode=%d\n\n"),
 									(int) i + 1,
 									g_arPathInfo[ i ].pszPath,
 									g_arPathInfo[ i ].slider,
-									uCycle ? uCycle : uDefCycle,
-									(UINT) g_arPathInfo[ i ].wDelay );
+									(int) g_arPathInfo[ i ].wCycle,
+									(int) g_arPathInfo[ i ].wDelay,
+									(int) g_arPathInfo[ i ].mode );
 	}
 	ReleaseSemaphore( hReconSema, 1L, NULL );
 
-	if( i == nItems )
-	{
+	if( i == nItems ) {
 		const size_t cchMessage = (size_t) icchWritten + 1;
 		TCHAR * lpMessage = TcharAlloc( cchMessage );
 		if( lpMessage )
@@ -994,11 +1005,11 @@ void ShowWatchList( HWND hWnd ) // 2017-11-03
 
 			MessageBox( hWnd, lpMessage, pszTitle, MB_ICONINFORMATION | MB_OK );
 
-			TcharFree( lpMessage );
+			MemFree( lpMessage );
 		}
 	}
 
-	for( i = nItems - 1; i >= 0; --i ) if( lppTmp[ i ] ) TcharFree( lppTmp[ i ] );
+	for( i = nItems - 1; i >= 0; --i ) if( lppTmp[ i ] ) MemFree( lppTmp[ i ] );
 	MemFree( lppTmp );
 }
 
@@ -1822,11 +1833,11 @@ bool IsMenuChecked( HWND hWnd, int idm )
 }
 CLEAN_POINTER LPVOID MemAlloc( rsize_t cb, size_t n )
 {
-	return HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, cb * n );
+	return HeapAlloc( GetProcessHeap(), 0, cb * n );
 }
 CLEAN_POINTER TCHAR * TcharAlloc( size_t cch )
 {
-	return static_cast<TCHAR *>( HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, cch * sizeof(TCHAR) ) );
+	return static_cast<TCHAR *>( HeapAlloc( GetProcessHeap(), 0, cch * sizeof(TCHAR) ) );
 }
 void MemFree( LPVOID lp )
 {

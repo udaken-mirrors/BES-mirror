@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2014 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -84,7 +84,11 @@ BOOL PrintFileHeader( FILE * fp )
 	_fputts( APP_LONGNAME, fp );
 
 #ifdef _UNICODE
-	_fputts( _T( " (Unicode)\r\n" ), fp );
+  #if defined(_M_IX86_FP) && (_M_IX86_FP == 2)
+	_fputts( _T( " (Unicode) SSE2\r\n" ), fp );
+  #else
+	_fputts( _T( " (Unicode) No-SSE2\r\n" ), fp );
+  #endif
 #else
 	_fputts( _T( " (ANSI)\r\n" ), fp );
 #endif
@@ -106,8 +110,6 @@ BOOL PrintFileHeader( FILE * fp )
 		GetCurrentProcessId(),
 		GetCurrentThreadId() );
 
-
-
 	OSVERSIONINFO osvi;
 	osvi.dwOSVersionInfoSize = sizeof( OSVERSIONINFO );
 	GetVersionEx( &osvi );
@@ -121,6 +123,8 @@ BOOL PrintFileHeader( FILE * fp )
 			lstrcpy( tmpstr, TEXT( "Windows Me" ) );
 	}
 */
+
+
 	if( osvi.dwMajorVersion == 5UL )
 	{
 		if( osvi.dwMinorVersion == 0UL )
@@ -138,6 +142,13 @@ BOOL PrintFileHeader( FILE * fp )
 			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "7 or Windows Server 2008 R2" ) );
 		else if( osvi.dwMinorVersion == 2UL )
 			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "8, Windows Server 2012, or newer" ) );
+		else if( osvi.dwMinorVersion == 3UL )
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "8.1 or Windows Server 2012 R2" ) );
+	}
+	else if( osvi.dwMajorVersion == 10UL )
+	{
+		if( osvi.dwMinorVersion == 0UL )
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "10 or Windows Server 2016" ) );
 	}
 
 	_ftprintf( fp, _T( "Windows %s ( OS Version: %lu.%lu Build %lu%s%s )\r\n" ),
@@ -149,12 +160,13 @@ BOOL PrintFileHeader( FILE * fp )
 		osvi.szCSDVersion
 	);
 
-	if( VerifyOSVer(6, 3, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("8.1") );
+	if( VerifyOSVer(10, 0, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("10") );
+	else if( VerifyOSVer(6, 3, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("8.1") );
 	else if( VerifyOSVer(6, 2, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("8") );
 	else if( VerifyOSVer(6, 1, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("7") );
 	else if( VerifyOSVer(6, 0, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("Vista") );
 	else if( VerifyOSVer(5, 1, 3) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("XP SP3") );
-	_ftprintf( fp, _T( "Verified: Windows %s or newer\r\n" ), tmpstr );
+	_ftprintf( fp, _T( "VerifyVersionInfo says: Windows %s or newer\r\n" ), tmpstr );
 
 	LANGID lang = GetSystemDefaultLangID();
 	VerLanguageName( (DWORD) lang, tmpstr, 255UL );
@@ -202,13 +214,13 @@ BOOL CloseDebugLog()
 	SYSTEMTIME st;
 	GetLocalTime( &st );
 
-	_ftprintf( fdebug, _T( "[ %04d-%02d-%02d %02d:%02d:%02d.%03d PID 0x%lx TID 0x%lx] " ),
+	_ftprintf( fdebug, _T( "[ %04d-%02d-%02d %02d:%02d:%02d.%03d PID 0x%lx TID 0x%lx ]" ),
 		st.wYear, st.wMonth, st.wDay,
 		st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
 		GetCurrentProcessId(),
 		GetCurrentThreadId() );
 
-	_fputts( _T( "-------- END --------\r\n\r\n\r\n" ), fdebug );
+	_fputts( _T( "\r\n-------- END --------\r\n\r\n\r\n" ), fdebug );
 	fclose( fdebug );
 	return TRUE;
 }

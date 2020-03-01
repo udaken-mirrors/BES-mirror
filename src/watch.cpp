@@ -128,7 +128,7 @@ static unsigned __stdcall LimitPlus( void * pv )
 	TARGETINFO * ti = (TARGETINFO *) pv;
 
 	if( ! ti[ 2 ].lpPath ) return 0xFFFF;
-
+	//const int mode = (int) ti[ 2 ].mode;
 
 #ifdef _DEBUG
 TCHAR dbgstr[256];_sntprintf_s(dbgstr,_countof(dbgstr),_TRUNCATE,_T("\t<LimitPlus> slot=%u PID=%d (%s)\n\n"),ti[2].slotid,
@@ -144,17 +144,18 @@ OutputDebugString(dbgstr);
 
 	WriteIni_Time( ti[ 2 ].disp_path ? ti[ 2 ].disp_path : ti[ 2 ].lpPath );
 
-	//EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
+	if( g_nPathInfo >= MAX_WATCH ) EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
+	else EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
 	EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_ENABLED );
 
 	TCHAR szTargetPath[ CCHPATH ] = _T("");
 	_tcscpy_s( szTargetPath, CCHPATH, ti[ 2 ].lpPath ); // TODO
 
 	ptrdiff_t i;
-	for( i = 8; i < 18; ++i )
+	for( i = 8; i < 18; i++ )
 		ppszStatus[ i ][ 0 ] = _T('\0');
 
-	//_tcscpy_s( ppszStatus[ 13 ], cchStatus, _T( "Watching... : hit [L] for more info." ) );
+	_tcscpy_s( ppszStatus[ 13 ], cchStatus, _T( "Watching... : hit [L] for more info." ) );
 
 	TCHAR str[ CCHPATHEX ];
 	_stprintf_s( str, _countof(str), _T( "Watching : %s" ), szTargetPath );
@@ -206,6 +207,7 @@ OutputDebugString(dbgstr);
 
 				pathInfo[ n ].wCycle = g_arPathInfo[ n ].wCycle;
 				pathInfo[ n ].wDelay = g_arPathInfo[ n ].wDelay;
+				pathInfo[ n ].mode = g_arPathInfo[ n ].mode;
 
 				size_t cchMem = g_arPathInfo[ n ].cchPath + 1;
 				if( pathInfo[ n ].pszPath ) TcharFree( pathInfo[ n ].pszPath );
@@ -221,18 +223,16 @@ OutputDebugString(dbgstr);
 		if( ! nInfo || MAX_WATCH < nInfo )
 			break;
 		
-		ptrdiff_t yy;
+		ptrdiff_t yy = 2;
 		if( 2 <= nInfo )
 		{
-			for( yy = 0; yy < 3 && yy < nInfo; ++yy )
+			// up to 4 lines can be shown (not MAX_WATCH): ppszStatus[14..17]
+			for( yy = 0; yy < 4 && yy < nInfo; ++yy )
 				SetLongStatusText( pathInfo[ yy ].pszPath, ppszStatus[ 14 + yy ] );
 		}
 
 		if( nInfo != prev_nInfo )
 		{
-			_stprintf_s( ppszStatus[ 13 ], cchStatus, _T( "Watching %d target%s..." ), (int) nInfo, ( nInfo == 1 ? _T("") : _T("s") ) );
-			if( nInfo >= 4 ) _tcscpy_s( ppszStatus[ 17 ], cchStatus, _T( "Hit [L] for the full list." ) );
-
 			InvalidateRect( hWnd, NULL, FALSE );
 		}
 		prev_nInfo = nInfo;
@@ -351,6 +351,7 @@ OutputDebugString(dbgstr);
 
 				ti[ slotid ].wCycle = pathInfo[ path_info_index ].wCycle;
 				ti[ slotid ].wDelay = pathInfo[ path_info_index ].wDelay;
+				ti[ slotid ].mode = (WORD) pathInfo[ path_info_index ].mode;  ///(WORD) mode; // ***
 
 				ti[ slotid ].fWatch = true;
 				ti[ slotid ].fUnlimited = false;
@@ -709,8 +710,6 @@ EXIT_THREAD:
 	ReleaseSemaphore( hSemaphore[ 3 ], 1L, NULL );
 
 	_tcscpy_s( ppszStatus[ 13 ], cchStatus, _T( "* Not watching *" ) );
-	//SetLongStatusText( szTargetPath, ppszStatus[ 14 ] );
-
 	ppszStatus[ 14 ][ 0 ] = _T('\0');
 	ppszStatus[ 15 ][ 0 ] = _T('\0');
 	ppszStatus[ 16 ][ 0 ] = _T('\0');
@@ -719,18 +718,22 @@ EXIT_THREAD:
 	if( fBES )
 	{
 		SendMessage( hWnd, WM_COMMAND, IDM_STOP, 0 );
+		ppszStatus[ 14 ][ 0 ] = _T('\0');
+		ppszStatus[ 15 ][ 0 ] = _T('\0');
 		_tcscpy_s( ppszStatus[ 16 ], cchStatus, _T( "* Denied *" ) );
 		_tcscpy_s( ppszStatus[ 17 ], cchStatus, _T("BES Can't Target BES"));
 	}
-
+	//else
+	//{
+	//	ppszStatus[ 16 ][ 0 ] = _T('\0');
+	//	ppszStatus[ 17 ][ 0 ] = _T('\0');
+	//}
 	InvalidateRect( hWnd, NULL, TRUE );
 
-	//if( ! g_bHack[ 2 ] )
-	//	EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED ); // ?
-
-	EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED ); // ?
-
 	g_bHack[ 3 ] = FALSE;
+
+	EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
+	EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED );
 
 	UpdateStatus( hWnd );
 
@@ -812,10 +815,11 @@ BOOL SelectWatch( HWND hWnd, TARGETINFO * pti )
 	if( ! dwcch || _countof(szTargetLongPath) <= dwcch )
 		_tcscpy_s( szTargetLongPath, _countof(szTargetLongPath), szTargetPath );
 
-	return SetTargetPlus( hWnd, pti, szTargetLongPath, GetSliderIni( szTargetLongPath, g_hWnd ) );
+	int aiParams[ 2 ] = { 0, 0 };
+	return SetTargetPlus( hWnd, pti, szTargetLongPath, GetSliderIni( szTargetLongPath, g_hWnd ), aiParams, DEF_MODE );
 }
 
-BOOL SetTargetPlus( HWND hWnd, TARGETINFO * pti, const TCHAR * pszTargetPath, int iSlider, const int * aiParams )
+BOOL SetTargetPlus( HWND hWnd, TARGETINFO * pti, const TCHAR * pszTargetPath, int iSlider, const int * aiParams, int mode )
 {
 #ifdef _DEBUG
 	//pti[2].dwProcessId=0;
@@ -826,20 +830,20 @@ BOOL SetTargetPlus( HWND hWnd, TARGETINFO * pti, const TCHAR * pszTargetPath, in
 
 	if( g_bHack[ 3 ] )
 	{
-		size_t cchPath = _tcslen( pszTargetPath );
-		size_t cchMem = cchPath + 256;
-		TCHAR * lpMem = TcharAlloc( cchMem );
-		if( ! lpMem ) return FALSE;
+//		MessageBox( hWnd, TEXT("Busy3"), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
+								size_t cchPath = _tcslen( pszTargetPath );
+								size_t cchMem = 32 + cchPath + 50;
+								TCHAR * lpMem = TcharAlloc( cchMem );
+								if( ! lpMem ) return FALSE;
+								int cycle = aiParams ? aiParams[ 0 ] : 0 ;
+								int delay = aiParams ? aiParams[ 1 ] : 0 ;
+								_stprintf_s( lpMem, cchMem, _T("bes.exe -J \"%s\" %d;%d;%d;%d"), 
+									pszTargetPath, iSlider, cycle, delay, mode );
 
-		_stprintf_s( lpMem, cchMem, _T("bes.exe -J \"%s\" %d;%d;%d"), pszTargetPath, iSlider,
-										aiParams ? aiParams[ 0 ] : 0,
-										aiParams ? aiParams[ 1 ] : 0 );
-
-		bool fAllowMoreThan99 = IsMenuChecked( hWnd, IDM_ALLOWMORETHAN99 );
-		BOOL bRet = HandleJobList( hWnd, lpMem, fAllowMoreThan99, pti );
-		TcharFree( lpMem );
-		//MessageBox( hWnd, TEXT("Busy3"), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
-		return bRet;
+								bool fAllowMoreThan99 = IsMenuChecked( hWnd, IDM_ALLOWMORETHAN99 );
+								HandleJobList( hWnd, lpMem, fAllowMoreThan99, pti );
+								TcharFree( lpMem );
+		return TRUE;
 	}
 
 	DWORD dwPID_LimitThisFirst = 0;
@@ -934,6 +938,7 @@ pti[2].slotid=2;
 	{
 		ResetTi( pti[ 2 ] );
 		pti[ 2 ].dwProcessId = dwPID_LimitThisFirst;
+		pti[ 2 ].mode = (WORD) mode;
 
 //		const TCHAR * pBkSlash = _tcsrchr( pszTargetPath, _T('\\') );
 //		const TCHAR * pExe = ( pBkSlash && pBkSlash[ 1 ] ) ? pBkSlash + 1 : pszTargetPath ;
@@ -987,6 +992,7 @@ pti[2].slotid=2;
 				if( aiParams[ 0 ] != -1 ) g_arPathInfo[ 0 ].wCycle = (WORD) aiParams[ 0 ]; // update if param(s) are defined & valid
 				if( aiParams[ 1 ] != -1 ) g_arPathInfo[ 0 ].wDelay = (WORD) aiParams[ 1 ];
 			}
+			g_arPathInfo[ 0 ].mode = (WORD) mode;
 
 			g_nPathInfo = 1;
 		}
@@ -1034,6 +1040,7 @@ pti[2].slotid=2;
 		return FALSE;
 	}
 
+
 	return TRUE;
 }
 
@@ -1071,12 +1078,13 @@ BOOL Unwatch( TARGETINFO * rgTargetInfo )
 	return bSuccess;
 }
 
-BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreThan99, TARGETINFO * ti )
+int HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreThan99, TARGETINFO * ti )
 {
 	TCHAR * arTargetPaths[ MAX_WATCH ];
 	int arSlider[ MAX_WATCH ];
 	int arCycle[ MAX_WATCH ];
 	int arDelay[ MAX_WATCH ];
+	int arMode[ MAX_WATCH ];
 	ptrdiff_t job_index;
 	ptrdiff_t first_job = 0;
 
@@ -1087,15 +1095,17 @@ BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreTha
 		arSlider[ job_index ] = 0;
 		arCycle[ job_index ] = 0;
 		arDelay[ job_index ] = 0;
+		arMode[ job_index ] = DEF_MODE;
 	}
 	
 	const ptrdiff_t numOfPaths = ParseJobList( lpszCommandLine, arTargetPaths, 
 										&arSlider[ 0 ],
 										&arCycle[ 0 ],
 										&arDelay[ 0 ],
+										&arMode[ 0 ],
 										MAX_WATCH, fAllowMoreThan99 );
 
-	if( ! numOfPaths ) return FALSE;
+	if( ! numOfPaths ) return 0;
 
 	// v1.7.5
 	ptrdiff_t numOfWatches = numOfPaths;
@@ -1111,7 +1121,7 @@ BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreTha
 			aiParams[ 1 ] = arDelay[ job_index ];
 			LimitPID( hWnd, &ti[ 0 ], pid, arSlider[ job_index ], FALSE, &aiParams[ 0 ] );
 
-			TcharFree( arTargetPaths[ job_index ] ); // this "path" is done
+			MemFree( arTargetPaths[ job_index ] ); // this "path" is done
 			arTargetPaths[ job_index ] = NULL;
 			--numOfWatches;
 		}
@@ -1163,6 +1173,7 @@ BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreTha
 						ti[ sx ].fUnlimited = false;
 						if( arCycle[ job_index ] != -1 ) ti[ sx ].wCycle = (WORD) arCycle[ job_index ];
 						if( arDelay[ job_index ] != -1 ) ti[ sx ].wDelay = (WORD) arDelay[ job_index ];
+						if( arMode[ job_index ] == 0 || arMode[ job_index ] == 1 ) ti[ sx ].mode = (WORD) arMode[ job_index ];
 					}
 				}
 			}
@@ -1212,7 +1223,12 @@ BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreTha
 
 						// Don't update Cycle/Delay but use the old values, if the new value is undefined/invalid
 						if( arCycle[ job_index ] == -1 ) arNewTargets[ job_index ].wCycle = g_arPathInfo[ ig ].wCycle;
+						else arNewTargets[ job_index ].wCycle = (WORD) arCycle[ job_index ]; //2019-02-22
 						if( arDelay[ job_index ] == -1 ) arNewTargets[ job_index ].wDelay = g_arPathInfo[ ig ].wDelay;
+						else arNewTargets[ job_index ].wDelay = (WORD) arDelay[ job_index ];
+						if( arMode[ job_index ] != 0 && arMode[ job_index ] != 1 ) arNewTargets[ job_index ].mode = g_arPathInfo[ ig ].mode;
+						else arNewTargets[ job_index ].mode = (WORD) arMode[ job_index ];
+
 
 						memcpy( &g_arPathInfo[ ig ], &arNewTargets[ job_index ], sizeof(PATHINFO) );
 
@@ -1223,6 +1239,7 @@ BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreTha
 						if( ig == 0 ) first_job = job_index; // ? TODO: test
 					}
 				}
+				else MessageBox( hWnd, _T("Too many targets too watch!"), _T("Error"), MB_OK | MB_ICONEXCLAMATION );
 			}
 			
 			ReleaseSemaphore( hReconSema, 1L, NULL );
@@ -1238,7 +1255,8 @@ BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreTha
 			int aiParams[ 2 ];
 			aiParams[ 0 ] = arCycle[ first_job ];
 			aiParams[ 1 ] = arDelay[ first_job ];
-			SetTargetPlus( hWnd, ti, arTargetPaths[ first_job ], arSlider[ first_job ], &aiParams[ 0 ] );
+			int mode = arMode[ first_job ];
+			SetTargetPlus( hWnd, ti, arTargetPaths[ first_job ], arSlider[ first_job ], &aiParams[ 0 ], mode );
 		}
 	}
 
@@ -1252,5 +1270,10 @@ BOOL HandleJobList( HWND hWnd, const TCHAR * lpszCommandLine, bool fAllowMoreTha
 		}
 	}
 
-	return TRUE;
+	if( g_nPathInfo >= MAX_WATCH ) EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_GRAYED );
+	else EnableMenuItem( GetMenu( hWnd ), IDM_WATCH, MF_BYCOMMAND | MF_ENABLED );
+	if( g_nPathInfo ) EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_ENABLED );
+	else EnableMenuItem( GetMenu( hWnd ), IDM_UNWATCH, MF_BYCOMMAND | MF_GRAYED );
+
+	return 0;
 }

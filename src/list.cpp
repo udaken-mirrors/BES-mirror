@@ -1,5 +1,5 @@
 /* 
- *	Copyright (C) 2005-2017 mion
+ *	Copyright (C) 2005-2019 mion
  *	http://mion.faireal.net
  *  This Program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License.
@@ -11,8 +11,9 @@ static ptrdiff_t pid_has_this_path(
 	const PATHINFO * arPathInfo,
 	ptrdiff_t nPathInfo,
 	TCHAR ** ppPath );
+static int s_uPrefix = 1; // for Window Title Hack (IDC_CHANGE_TITLE etc.) @2019-08-15
 
-static BOOL BES_ShowWindow( HWND hDlg, HWND hwnd, int iShow )
+static BOOL BES_ShowWindow( HWND hDlg, HWND hwnd, int iShow, const TCHAR * lpWinTitle )
 {
 	int nCmdShow;
 	if( iShow == BES_SHOW_MANUALLY )
@@ -80,6 +81,43 @@ static BOOL BES_ShowWindow( HWND hDlg, HWND hwnd, int iShow )
 		ShowWindow( hwnd, SW_HIDE );
 		return TRUE;
 	}
+	else if( iShow == IDC_CHANGE_TITLE || iShow == IDC_RESTORE_TITLE ) // 2019-08-15
+	{
+		if( lpWinTitle == NULL ) return FALSE;
+
+		TCHAR szText[ 1000 ] = TEXT("");
+		GetWindowText( hwnd, szText, (int) _countof(szText) );
+		if( _tcsncmp( szText, lpWinTitle, 40 ) == 0 ) // text length adjusted: 49 cch is enough; we use the first 40 cch max
+		{
+			if( iShow == IDC_CHANGE_TITLE && ! IsWindowVisible( hwnd ) ) {
+				MessageBox( hDlg, szText, TEXT("Error: Invisible Window"), MB_OK | MB_ICONHAND );
+				return FALSE;
+			}
+
+			TCHAR szNewText[ 1024 ] = TEXT("");
+			if( iShow == IDC_CHANGE_TITLE )
+				_stprintf_s( szNewText, _countof(szNewText), _T("[%02u] %s"), s_uPrefix, szText );
+			else
+				_tcscpy_s( szNewText, _countof(szNewText), &szText[ 5 ] );
+
+			TCHAR szMessage[ 4096 ] = TEXT("");
+			_stprintf_s( szMessage, _countof(szMessage),
+				_T("Current Window Title:\r\n\t%s\r\nNew Window Title:\r\n\t%s"),
+				szText, szNewText );
+
+			if( iShow == IDC_RESTORE_TITLE && ! has_prefix( &szText[ 0 ] ) ) return FALSE;
+
+			const int id = MessageBox( hDlg, szMessage,
+										iShow == IDC_CHANGE_TITLE ? _TEXT("Change?") : _TEXT("Restore?"),
+										MB_OKCANCEL | MB_ICONQUESTION );
+			if( id == IDOK )
+			{
+				SendMessage( hwnd, WM_SETTEXT, 0, (LPARAM) szNewText );
+				if( iShow == IDC_CHANGE_TITLE ) ++s_uPrefix;
+				return FALSE;
+			}
+		}
+	}
 
 	return TRUE;
 }
@@ -90,7 +128,8 @@ static bool show_process_win_worker(
 	const DWORD * pTIDs,
 	ptrdiff_t numOfThreads,
 	WININFO * pWinInfo,
-	int iShow )
+	int iShow,
+	const TCHAR * lpWinTitle )
 {
 	bool ret = false;
 
@@ -110,7 +149,7 @@ static bool show_process_win_worker(
 		const ptrdiff_t numOfWindows = pWinInfo->numOfItems;
 		for( ptrdiff_t n = 0; n < numOfWindows; ++n )
 		{
-			if( ! BES_ShowWindow( hDlg, pWinInfo->hwnd[ n ], iShow ) )
+			if( ! BES_ShowWindow( hDlg, pWinInfo->hwnd[ n ], iShow, lpWinTitle ) )
 				return true;
 		}
 	}
@@ -118,16 +157,17 @@ static bool show_process_win_worker(
 	return  ret;
 }
 
-static void ShowProcessWindow( HWND hDlg, DWORD dwProcessID, int iShow )
+static void ShowProcessWindow( HWND hDlg, DWORD dwProcessID, int iShow, const TCHAR * lpWinTitle = NULL )
 {
 	WININFO * lpWinInfo = (WININFO *) MemAlloc( sizeof(WININFO), 1 );
 	if( lpWinInfo )
 	{
+		// lpWinInfo->pid = dwProcessID; /* unused */
 		ptrdiff_t numOfThreads = 0;
 		DWORD * pTIDs = ListProcessThreads_Alloc( dwProcessID, numOfThreads );
 		if( pTIDs )
 		{
-			if( ! show_process_win_worker( hDlg, pTIDs, numOfThreads, lpWinInfo, iShow ) )
+			if( ! show_process_win_worker( hDlg, pTIDs, numOfThreads, lpWinInfo, iShow, lpWinTitle ) )
 				MessageBox( hDlg, _T("No windows!"), APP_NAME, MB_OK | MB_ICONINFORMATION );
 
 			HeapFree( GetProcessHeap(), 0, pTIDs );
@@ -208,6 +248,10 @@ static const PROCESS_THREAD_PAIR * _find_pid( DWORD pid, const PROCESS_THREAD_PA
 
 void PathToExe( const TCHAR * pszPath, TCHAR * pszExe, rsize_t cchExe )
 {
+	if( ! pszPath ) {
+		if( pszExe ) *pszExe = _T('\0');
+		return;
+	}
 	const TCHAR * pBkSlash = _tcsrchr( pszPath, _T('\\') );
 	_tcscpy_s( pszExe, cchExe, (pBkSlash && pBkSlash[ 1 ]) ? pBkSlash + 1 : pszPath );
 }
@@ -744,11 +788,30 @@ static void LV_OnContextMenu( HWND hDlg, HWND hLV, LPARAM lParam, int iff, ptrdi
 		AppendMenu2( hMenu, hDlg, IDC_HIDE, TEXT( "&Hide" ) );
 		AppendMenu2( hMenu, hDlg, IDC_SHOW, TEXT( "&Show" ) );
 
+		if( szTitle[ 0 ] != _T('\0') )
+		{
+			HMENU hSubMenu2 = CreatePopupMenu(); // 2019-08-15
+			if( hSubMenu2 )
+			{
+				UINT menuFlags = (UINT)( ! has_prefix(szTitle) && s_uPrefix <= 99 ? (MF_STRING) : (MF_STRING|MF_GRAYED) );
+				AppendMenu( hSubMenu2, menuFlags, IDC_CHANGE_TITLE, TEXT( "&Change Title" ) );
+
+				menuFlags = (UINT)( has_prefix(szTitle) ? (MF_STRING) : (MF_STRING|MF_GRAYED) );
+				AppendMenu( hSubMenu2, menuFlags, IDC_RESTORE_TITLE, TEXT( "&Restore Title" ) );
+
+				AppendMenu( hSubMenu2, MF_SEPARATOR, 0, NULL );
+				menuFlags = (UINT)( s_uPrefix != 1 ? (MF_STRING) : (MF_STRING|MF_GRAYED) );
+				AppendMenu( hSubMenu2, menuFlags, IDC_RESET_PREFIX, TEXT( "Reset &Prefix to [01]" ) );
+				if( ! AppendMenu( hMenu, MF_POPUP, (UINT_PTR) hSubMenu2, TEXT("Window &Title Hack") ) )
+					DestroyMenu( hSubMenu2 );
+			}
+		}
+
 		AppendMenu( hMenu, MF_SEPARATOR, 0, NULL );
 		AppendMenu2( hMenu, hDlg, IDC_FRIEND, TEXT( "Mark as &Friend" ) );
 		AppendMenu2( hMenu, hDlg, IDC_RESET_IFF, TEXT( "Mark as &Unknown" ) );
 		AppendMenu2( hMenu, hDlg, IDC_FOE, TEXT( "Mark as F&oe" ) );
-		
+
 		HMENU hSubMenu = CreatePopupMenu();
 		if( hSubMenu )
 		{
@@ -760,7 +823,7 @@ static void LV_OnContextMenu( HWND hDlg, HWND hLV, LPARAM lParam, int iff, ptrdi
 		
 		const int cmd = TrackPopupMenuEx( hMenu, popupFlags, pt.x, pt.y, hDlg, &tpmp );
 
-		DestroyMenu( hMenu );
+		DestroyMenu( hMenu ); // This function will destroy the menu and all its submenus
 
 		if( cmd )
 		{
@@ -797,7 +860,7 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 #endif
 	///static ptrdiff_t * MetaIndex = NULL; // maxItems
 
-	static TARGETINFO * pTarget = NULL;
+	static TARGETINFO * pTarget = NULL;  // pointer to TARGETINFO ti[ MAX_SLOTS ];
 
 	static HFONT hfontPercent = NULL;
 	//static int hot[ MAX_SLOTS ];
@@ -1059,10 +1122,19 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 			for( ptrdiff_t i = 0; i < cItems; ++i )
 			{
 				ptrdiff_t g = 0;
-				for( ; g < MAX_SLOTS; ++g )
+				for( ; g < MAX_SLOTS; ++g ) {
 					if( ti[ i ].dwProcessId == pTarget[ g ].dwProcessId ) break;
+				}
+				// NOTE: g==MAX_SLOTS if no slot is used for that process
 				
-				ti[ i ].slotid = (UINT) g;
+				ti[ i ].slotid = (WORD) g;
+				
+				/// FIX @ 20190317 ## g==MAX_SLOTS is possible; pTarget[MAX_SLOTS-1] is the last element
+				/// ti[ i ].fWatched = pTarget[ g ].fWatch;
+				ti[ i ].fWatched = ( g >= MAX_SLOTS ) ? false : pTarget[ g ].fWatch ;
+
+				//ti[ i ].fUnlimited = pTarget[ g ].fUnlimited; // flag not (yet) used: use ! g_bHack[ g ] instead
+				
 #ifdef PTRSORT
 				lpPtrArr[ i ] = &ti[ i ];
 #endif
@@ -1205,6 +1277,9 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 
 			const int CtrlID = LOWORD( wParam );
 			if( CtrlID != IDC_NUKE
+				&& CtrlID != IDC_CHANGE_TITLE // 2019-08-15
+				&& CtrlID != IDC_RESTORE_TITLE
+				&& CtrlID != IDC_RESET_PREFIX
 				&& !( CtrlID == IDOK && lParam == XLIST_WATCH_THIS )
 				&& ! IsWindowEnabled( GetDlgItem( hDlg, CtrlID ) ) )
 			{
@@ -1269,12 +1344,23 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 					
 					ptrdiff_t iMyId = 0;
 					int iSlider = 0;
+					int response = 0; // HIWORD: 1=Watch,0=Limit; LOWORD: 2=ByProcess,1=ThreadByThread,0=Cancel
+					int mode = DEF_MODE;
 
 					// fLimitThis
 					if( CtrlID == IDC_SLIDER_BUTTON
-						|| DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_QUESTION), hDlg,
-											&Question, (LPARAM) &ProcessInfo ) )
+						|| ( response = DialogBoxParam( g_hInst, MAKEINTRESOURCE(IDD_QUESTION), hDlg,
+											&Question, (LPARAM) &ProcessInfo ) ) != 0 )
 					{
+						if( HIWORD( response ) == 1 ) {
+							ProcessInfo.fWatch = true;
+							lParam = XLIST_WATCH_THIS;
+						} else {
+							ProcessInfo.fWatch = false;
+							lParam = 0;
+						}
+						mode = LOWORD( response ) - 1;
+						if( mode != 1 && mode != 0 ) mode = DEF_MODE;
 						if( ProcessInfo.pExe &&
 							(ProcessInfo.iIFF == IFF_UNKNOWN || ProcessInfo.iIFF == IFF_FRIEND) )//?
 						{
@@ -1341,11 +1427,11 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 							if( g_bHack[ 3 ] )
 							{
 								size_t cchPath = _tcslen( ProcessInfo.szPath );
-								size_t cchMem = 32 + cchPath + 32;
+								size_t cchMem = 32 + cchPath + 50;
 								TCHAR * lpMem = TcharAlloc( cchMem );
 								if( ! lpMem ) break;
 
-								_stprintf_s( lpMem, cchMem, _T("bes.exe -J \"%s\" %d"), ProcessInfo.szPath, iSlider );
+								_stprintf_s( lpMem, cchMem, _T("bes.exe -J \"%s\" %d;0;0;%d"), ProcessInfo.szPath, iSlider, mode );
 
 								bool fAllowMoreThan99 = IsMenuChecked( g_hWnd, IDM_ALLOWMORETHAN99 );
 								HandleJobList( g_hWnd, lpMem, fAllowMoreThan99, pTarget );
@@ -1424,18 +1510,20 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 								SetTargetPlus( g_hWnd, 
 												pTarget,
 												ProcessInfo.szPath,
-												GetSliderIni( ProcessInfo.szPath, g_hWnd ) );
+												GetSliderIni( ProcessInfo.szPath, g_hWnd ),
+												NULL,
+												mode );
 							}
 						}
 						else if( g < MAX_SLOTS && g != 3 ) // relimit
 						{
 							iSlider = g_Slider[ g ];
-							SendMessage( g_hWnd, WM_USER_RESTART, (WPARAM) g, 0 );
+							SendMessage( g_hWnd, WM_USER_RESTART, MAKEWPARAM( g, mode ), 0 );
 						}
 						else // new target (no-watch)
 						{
 							iSlider = GetSliderIni( ProcessInfo.szPath, g_hWnd ); // +20170906
-							LimitProcess_NoWatch( hDlg, pTarget, ProcessInfo, NULL );
+							LimitProcess_NoWatch( hDlg, pTarget, ProcessInfo, NULL, mode );
 						}
 					
 						SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
@@ -1500,8 +1588,7 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 					if( g_numOfEnemies < MAX_ENEMY_CNT )
 					{
 						size_t cchMem = _tcslen( ProcessInfo.pExe ) + 1;
-						g_lpszEnemy[ g_numOfEnemies ]
-							= TcharAlloc( cchMem );
+						g_lpszEnemy[ g_numOfEnemies ] = TcharAlloc( cchMem );
 						if( g_lpszEnemy[ g_numOfEnemies ] )
 							_tcscpy_s( g_lpszEnemy[ g_numOfEnemies++ ], cchMem, ProcessInfo.pExe );
 						else break;
@@ -1524,7 +1611,8 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 						}
 					}
 
-					//ProcessInfo.iIFF = IFF_FOE; // <-- not really needed
+					ProcessInfo.iIFF = IFF_FOE; // <-- not really needed (?!)
+					UpdateIFF_Ini( FALSE );
 					SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
 					break;
 				}
@@ -1537,9 +1625,8 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 					if( g_numOfFriends < MAX_FRIEND_CNT )
 					{
 						size_t cchMem = _tcslen( ProcessInfo.pExe ) + 1;
-						g_lpszFriend[ g_numOfFriends ] =
-								TcharAlloc( cchMem );
-						if( g_lpszFriend[ g_numOfFriends ] )
+						g_lpszFriend[ g_numOfFriends ] = TcharAlloc( cchMem );
+						if( g_lpszFriend[ g_numOfFriends ] != NULL )
 							_tcscpy_s( g_lpszFriend[ g_numOfFriends++ ], cchMem, ProcessInfo.pExe );
 						else break;
 					}
@@ -1561,7 +1648,8 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 						}
 					}
 
-					//ProcessInfo.iIFF = IFF_FRIEND; // <-- not really needed
+					ProcessInfo.iIFF = IFF_FRIEND; // <-- not really needed (?!)
+					UpdateIFF_Ini( FALSE );
 					SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
 					break;
 				}
@@ -1569,7 +1657,7 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 				case IDC_RESET_IFF:
 				{
 					if( ! ProcessInfo.pExe ) break;
-					if( ProcessInfo.iIFF == IFF_FRIEND )
+					if( ProcessInfo.iIFF == IFF_FRIEND ) // ex-friend
 					{
 						for( ptrdiff_t i = 0; i < g_numOfFriends; ++i )
 						{
@@ -1588,7 +1676,7 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 							}
 						}
 					}
-					else if( ProcessInfo.iIFF == IFF_FOE )
+					else if( ProcessInfo.iIFF == IFF_FOE ) // ex-foe
 					{
 						for( ptrdiff_t i = 0; i < g_numOfEnemies; ++i )
 						{
@@ -1608,7 +1696,8 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 						}
 					}
 
-					//ProcessInfo.iIFF = IFF_UNKNOWN; // <-- not really needed
+					ProcessInfo.iIFF = IFF_UNKNOWN; // <-- not really needed (?!)
+					UpdateIFF_Ini( FALSE );
 					SendMessage( hDlg, WM_USER_REFRESH, pid, URF_ENSURE_VISIBLE );
 					break;
 				}
@@ -1664,9 +1753,20 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 
 				case IDC_HIDE:
 				case IDC_SHOW:
+				case IDC_CHANGE_TITLE:  // 2019-08-15
+				case IDC_RESTORE_TITLE:  // 2019-08-15
 				{
 					HWND hLV = GetDlgItem( hDlg, IDC_TARGET_LIST );
 					SetDlgItemFocus( hDlg, hLV );
+
+					if( CtrlID == IDC_CHANGE_TITLE || CtrlID == IDC_RESTORE_TITLE )
+					{
+						TCHAR szTitle[ 64 ] = TEXT(""); // text length adjusted: 49 cch is enough
+						const ptrdiff_t Sel = ListView_GetCurrentSel( hLV );
+						ListView_GetItemText( hLV, Sel, TITLE, szTitle, _countof(szTitle) );
+						ShowProcessWindow( hDlg, pid, CtrlID, szTitle );
+						break;
+					}
 
 					ShowProcessWindow( hDlg, pid,
 										CtrlID == IDC_HIDE ? BES_HIDE : BES_SHOW );
@@ -1674,10 +1774,15 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 					if( ! fContextMenu && g_bSelNextOnHide && sel + 1 < cItems && KEY_UP( VK_SHIFT ) )
 					{
 						ListView_SetCurrentSel( hLV, sel + 1, TRUE );
-						LV_OnSelChange( hDlg, SORTEE, cItems, sel + 1, curIdx, pTarget );
+						LV_OnSelChange( hDlg, SORTEE, cItems, sel + 1, curIdx );
 					}
 					break;
 				}
+
+				case IDC_RESET_PREFIX:
+					if( MessageBox( hDlg, TEXT("The next prefix will be [01]."),
+						TEXT("Window Title Hack"), MB_OKCANCEL | MB_ICONINFORMATION ) == IDOK ) s_uPrefix = 1;
+					break;
 				
 				case IDC_SHOW_MANUALLY:
 					ShowProcessWindow( hDlg, pid, BES_SHOW_MANUALLY );
@@ -1721,7 +1826,7 @@ INT_PTR CALLBACK xList( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam )
 					NMLISTVIEW& nm = *(NMLISTVIEW*) lParam;
 					if( nm.uNewState & LVIS_FOCUSED )
 					{
-						LV_OnSelChange( hDlg, SORTEE, cItems, nm.iItem, curIdx, pTarget );
+						LV_OnSelChange( hDlg, SORTEE, cItems, nm.iItem, curIdx );
 					}
 				}
 				else if( notified.code == NM_CLICK || notified.code == NM_RCLICK )
@@ -2479,7 +2584,18 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 
 			SetDlgItemText( hDlg, IDC_MSG1, msg1 );
 			SetDlgItemText( hDlg, IDC_EDIT, msg2 );
-			
+#ifdef _DEBUG
+			OutputDebugString(msg1);
+#endif
+
+#if DEF_MODE == 0
+# define DEF_MODE_RADIO IDC_RADIO_MODE0
+#else
+# define DEF_MODE_RADIO IDC_RADIO_MODE1
+#endif
+			CheckRadioButton( hDlg, IDC_RADIO_MODE0, IDC_RADIO_MODE1, DEF_MODE_RADIO );
+			CheckRadioButton( hDlg, IDC_RADIO_LIMIT, IDC_RADIO_WATCH, lpTarget->fWatch ? IDC_RADIO_WATCH : IDC_RADIO_LIMIT );
+
 			PostMessage( hDlg, WM_USER_CAPTION, 0, 0 );
 			break;
 		}
@@ -2489,10 +2605,16 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 			switch( LOWORD( wParam ) )
 			{
 				case IDOK:
-					EndDialog( hDlg, TRUE );
+				{
+					int mode = ( IsDlgButtonChecked( hDlg, IDC_RADIO_MODE0 ) ) ? 0 : 1 ;
+					BOOL bWatch = ( IsDlgButtonChecked( hDlg, IDC_RADIO_WATCH ) ) ? TRUE : FALSE;
+
+					// LOWORD=2 if mode1, =1 if mode0
+					EndDialog( hDlg, MAKELONG( mode + 1, bWatch ) );
 					break;
+				}
 				case IDCANCEL:
-					EndDialog( hDlg, FALSE );
+					EndDialog( hDlg, 0 );
 					break;
 				default:
 					break;
@@ -2549,6 +2671,10 @@ static INT_PTR CALLBACK Question( HWND hDlg, UINT message, WPARAM wParam, LPARAM
 
 bool IsAbsFoe( LPCTSTR strPath )
 {
+	if( ! strPath ) {
+		MessageBox( NULL, _T("DEBUG ME"), _T("IsAbsFoe"), MB_OK );
+		return false;
+	}
 	const TCHAR * pntr = _tcsrchr( strPath, _T('\\') );
 	return IsAbsFoe2( (pntr && pntr[ 1 ]) ? pntr + 1 : strPath, strPath );
 }
@@ -3050,7 +3176,7 @@ TCHAR * PIDToPath_Alloc( DWORD dwProcessID, size_t * pcch ) // v1.7.5
 	return lpPath;
 }
 
-BOOL LimitProcess_NoWatch( HWND hDlg, TARGETINFO * pTarget, PROCESSINFO& ProcessInfo, const int * aiParams ) // v1.7.5
+BOOL LimitProcess_NoWatch( HWND hDlg, TARGETINFO * pTarget, PROCESSINFO& ProcessInfo, const int * aiParams, int mode ) // v1.7.5
 {
 	ptrdiff_t iMyId;
 
@@ -3077,6 +3203,7 @@ BOOL LimitProcess_NoWatch( HWND hDlg, TARGETINFO * pTarget, PROCESSINFO& Process
 		if( aiParams[ 0 ] != -1 ) pTarget[ iMyId ].wCycle = (WORD) aiParams[ 0 ];
 		if( aiParams[ 1 ] != -1 ) pTarget[ iMyId ].wDelay = (WORD) aiParams[ 1 ];
 	}
+	pTarget[ iMyId ].mode = (WORD) mode;
 
 	g_Slider[ iMyId ] = GetSliderIni( ProcessInfo.szPath, g_hWnd );
 
@@ -3130,7 +3257,7 @@ BOOL LimitPID( HWND hWnd, TARGETINFO * pTarget, const DWORD pid, int iSlider, BO
 
 	BOOL bRet = LimitProcess_NoWatch( hWnd, pTarget, pi, aiParams );
 
-	TcharFree( pi.szPath );
+	MemFree( pi.szPath );
 
 	return bRet;
 }

@@ -1355,19 +1355,145 @@ one session, and a friend becomes an enemy.
 2017-03-15 (1.7.5)
 [MOD] updated command-line help
 
+2017-09-06 (1.7.6pre)
+[NEW] hack: As a test, use DebugActiveProcess and DebugActiveProcessStop (1.7.6x only)
+[FIX] xList: on new target, GetSliderIni was not called.
+[MOD] xList: LV_OnSelChange: always set the slider.
+
+2017-09-07 (1.8.0-test1)
+[FIX] DEBUG ver. only: fixed "BAD pix" error.
+[NEW] Optional Mode 1 ("x" mode above, using DebugActiveProcess).
+
+2017-09-08 (1.8.0-test2)
+[FIX] In mode 1, don't try to show # of threads.
+[NEW] "Too many" error messaage if you try to watch too many targets.
+[MOD] Better "Not watching" message when multi-watch is canceled.
+[NEW] xList: Disable the Watch buttton if not watchable.
+
+2017-09-10
+* v1.7.6 Released.
+
 2017-11-04 (1.7.7-test1)
-[NEW] MAX_WATCH = 8 from 4
-[FIX] Disable the Watch button, if not watchable.
+* For 1.7.x see 1.7.7 src
 
-2017-11-04 (1.7.7-test2)
-[FIX] Watch List: show the def. val. when delay=0.
+2019-02-21 (1.8.0-test4)
+[NEW] Question: IDC_RADIO_LIMIT and IDC_RADIO_WATCH
 
-2017-11-05 (1.7.7-test2)
-[FIX] A watched-target is (re)watchable. (FIX to 2017-11-04)
-[FIX] Don't disable IDM_WATCH anymore just because the watch table is non-empty.
+2019-02-22 (1.8.0-test5)
+[FIX] Don't disable IDM_WATCH ***
 
-2017-11-06 (1.7.7-test2)
-[MOD] AboutShortcuts shows [L] (Show the Watch List).
+2019-02-24 (1.8.0-test5)
+[MOD] DEF_MODE=1
+[FIX] Disable IDM_WATCH if MAX_WATCH. ***
 
-2017-12-01 (1.7.7)
-[MOD] Added HEAP_ZERO_MEMORY in HeapAlloc, just in case.
+2019-03-01 (1.8.0-test6)
+[MOD] DEF_MODE=0
+[FIX] Translation: S_QUESTION2_FRE ***
+
+2019-03-17 (1.8.0-test7-Joe)
+[MOD] hack.cpp #if 0 //20160922 to #if 1 //20190317
+- Based on the comment from Joe
+
+2019-03-17 (1.8.0-test8-Joe)
+[FIX] list.cpp xList: bad memory access pTarget[ g ] <-- TODO: bad from which version? ***
+[FIX] list.h LV_OnSelChange: bad memory access g_bHack[ Item.slotid ]
+
+2019-03-17 (1.8.0-test8-JP)
+[MOD] hack.cpp #if 0 //20160922 reverted
+
+2019-03-22 (1.8.0-test9-Joe)
+[MOD] hack.cpp #if 1 //20190317 again, now called #ifdef COLD_WATCH_SLIDER ***
+[NEW] #ifdef COLD_WATCH_SLIDER, enable the slider #3 while watching-but-not-limiting
+In this test version, the slider #3 should work fine while watching-but-not-limiting.
+But this is not well-tested.
+<NOTES>
+[here "watchee" means "target that is being watched"]
+(1) With the slider #3, you can change the percentage used for the first target of the watch list.
+    You can't explicitly set the percentage for the other watchees, if multi-watching.  But see below.
+(2) In the current official version 1.7.7 (and most probably in 1.8.0-test),
+    although you can't move the slider #3 while watching preemptively,
+    BES does remember the last-used percentage for the watchee and automatically uses it when the target is detected.
+    This should work also when multi-watching.  Also, you should be able to explicitly set various watch parameters
+    via command-line.
+(3) In general, the percentage is set when BES starts watching a specific target, and applied to every instance of
+    that watchee.  This is by design and seems reasonable (*).  However, you can change this percentage via the slider #3
+    while watching-but-not-limiting.  Once an instance of the watchee is detected and BES starts limiting it
+    using the slot #3, the slider #3 is only for that instance, and not for the watch parameter.
+    (*) Example: If you tell BES to watch x264.exe
+    with 12% and BES detects 2 instances (A and B) of x264.exe; then A and B are both limited with 12%.
+    Now if you move the slider for A to 50%, what will happen when BES finds the 3rd instance "C" of x264.exe?
+    BES is still under the order to watch with 12%, as you only moved the slider for A.
+    If BES is to limit C with 50%, then what should it do about B?  When you move the slider A,
+    should the slider B automatically move too?  That would be unreasonable.
+(4) If you routinely use BES, you may want to start BES automatically on boot (and let it watch whatever
+    with a specific percentage).  This is easily doable with command line parameters.
+(5) Some encoding app uses a lot of short-lived threads, when BES becomes less effective.  In such a situation,
+    try Mode 1 via the "Limit How?" radio buttons.  Mode 1 is new in 1.8.x and not yet optimized, maybe unstable.
+
+2019-03-24 (1.8.0-test9-Joe+)
+[ADD] a few comments; no real code changes
+
+2019-05-20 (1.8.0-test10)
+[MOD] list.cpp: set ProcessInfo.iIFF on IDC_FOE etc.
+[NEW] Write a debug log entry about WriteIni in _bes_uninit.
+- Reverted on 2019-05-22.
+[FIX] BES.ini: Update the Time section on exit (delete too old entries). ***
+- Cf. 2019-05-22
+[FIX] WriteIni: some memory blocks were not freed in an exceptional case. ***
+
+2019-05-21 (1.8.0-test11)
+[MOD] WriteIni calls UpdateIFF_Ini().
+[NEW] list.cpp also calls UpdateIFF_Ini(), on IDC_FOE, etc.
+[FIX] ReadIni_Time: should return the current time by default.
+- Otherwise, pExe (input) looks like very old (time=0).
+- Revereted in test13.
+[MOD] Always use UINT64 for time, instead of INT64.
+
+2019-05-22 (1.8.0-test12)
+[FIX] ReadIni_Time: sizeof -> _countof (bug introduced in test11)
+[MOD] SetSliderIni: don't remember "PID:..." ***
+[MOD] Don't forget [Time] entries so easily.
+- Cf. 2019-05-20
+
+2019-05-23 (1.8.0-test13)
+[MOD] ReadIni_Time: return 0 if not listed in [Time].
+- Cf. 2019-05-21
+[NEW] Forget too old [Slider] entries. ***
+- On exit, a Slider entry is saved only for an Enemy entry.
+
+2019-05-26 (1.8.0-test14)
+[MOD] WriteIni: no more frees some pointers as its side business.
+- Instead, we call FreePointers().
+[MOD] WriteIni is no more called on early exit.
+- Typically, when exiting because another BES is running.
+[NEW] PrintFileHeader: try to recognize Win10. ***
+[MOD] Logging: prettier "END" line.
+
+2019-08-15 (1.8.0-test15)
+[NEW] Process List: Window Title Hack in context menu.
+- Change Window Title (id 1055)
+- Restore Window Title (id 1056)
+- Reset Prefix to [01] (id 1057)
+
+2019-08-15 (1.8.0-test15+)
+[MOD] Add SEPARATOR in the Title Hack menu.
+[MOD] Don't add Title Hack if no window title exists.
+
+2019-08-16 (1.8.0-test16)
+[MOD] Don't change window title if that window is invisible.
+[MOD] Macro 1055..1057 = IDC_ + CHANGE_TITLE, RESTORE_TITLE, RESET_PREFIX
+
+2019-08-17 (1.8.0-test17)
+[NEW] Log: show "SSE2" or "No-SSE2"
+[MOD] About box: show "No-SSE2" if it is not a SSE2 build.
+[NEW] About box: detect the boss key [B].
+
+
+
+
+todo: REMOVE MODE0
+todo: next time, resume session
+todo: gamer mode @cycle ~40
+todo: can't switch to Mode 1
+todo: after -u, wCycle is lost when re-limited via GUI?
+--no-watch option?

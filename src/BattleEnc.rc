@@ -56,7 +56,7 @@ BEGIN
         MENUITEM "&Unlimit All\tu",             IDM_STOP
         MENUITEM "&Control...\tc",              IDM_SETTINGS
         MENUITEM SEPARATOR
-        MENUITEM "Show Watch &List\tl",            IDM_SHOWWATCHLIST
+        MENUITEM "Show Watch &List\tl",         IDM_SHOWWATCHLIST
         MENUITEM "U&nwatch",                    IDM_UNWATCH
     END
     POPUP "&Options"
@@ -183,14 +183,21 @@ BEGIN
     DEFPUSHBUTTON   "&Close",IDOK,146,301,46,16
 END
 
-IDD_QUESTION DIALOGEX 60, 60, 331, 164
+IDD_QUESTION DIALOGEX 60, 60, 331, 213
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION
 EXSTYLE WS_EX_CLIENTEDGE
 CAPTION "Confirmation"
 FONT 10, "Tahoma", 0, 0, 0x1
 BEGIN
-    DEFPUSHBUTTON   "&Yes",IDOK,79,133,50,14
-    PUSHBUTTON      "&Cancel",IDCANCEL,197,133,50,14
+    GROUPBOX        "Limit What?",IDC_STATIC,27,125,275,27
+    CONTROL         "&Just This Process",IDC_RADIO_LIMIT,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,43,135,102,11
+    CONTROL         "&Every Instance of This EXE (Watch)",IDC_RADIO_WATCH,
+                    "Button",BS_AUTORADIOBUTTON | WS_TABSTOP,156,135,137,11
+    GROUPBOX        "Limit How?",IDC_STATIC,27,155,275,27
+    CONTROL         "&Thread by Thread",IDC_RADIO0,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,43,165,102,11
+    CONTROL         "By &Process",IDC_RADIO1,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,156,165,137,11
+    DEFPUSHBUTTON   "&Yes",IDOK,79,189,50,14
+    PUSHBUTTON      "&Cancel",IDCANCEL,197,189,50,14
     LTEXT           "msg1",IDC_MSG1,19,7,293,47
     EDITTEXT        IDC_EDIT,29,61,273,56,ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | NOT WS_BORDER | WS_VSCROLL,WS_EX_STATICEDGE
 END
@@ -279,7 +286,7 @@ BEGIN
         LEFTMARGIN, 7
         RIGHTMARGIN, 324
         TOPMARGIN, 7
-        BOTTOMMARGIN, 157
+        BOTTOMMARGIN, 206
     END
 
     IDD_LIST, DIALOG
@@ -309,8 +316,8 @@ IDI_ACTIVE              ICON                    "active.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,7,7,0
- PRODUCTVERSION 1,7,7,0
+ FILEVERSION 1,8,0,17
+ PRODUCTVERSION 1,8,0,17
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -328,12 +335,12 @@ BEGIN
             VALUE "Comments", "GNU General Public License"
             VALUE "CompanyName", "http://mion.faireal.net/BES/"
             VALUE "FileDescription", "Per-Process CPU Limiter"
-            VALUE "FileVersion", "1, 7, 7, 0"
+            VALUE "FileVersion", "1, 8, 0, 17"
             VALUE "InternalName", "BES"
-            VALUE "LegalCopyright", "Copyright 2004-2017"
+            VALUE "LegalCopyright", "Copyright 2004-2019"
             VALUE "OriginalFilename", "BES.exe"
             VALUE "ProductName", "BES - Battle Encoder Shirasé"
-            VALUE "ProductVersion", "1, 7, 7, 0"
+            VALUE "ProductVersion", "1, 8, 0, 17"
         END
     END
     BLOCK "VarFileInfo"
