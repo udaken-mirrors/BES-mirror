@@ -46,7 +46,7 @@ static WNDPROC_FARPROC PrevTrackbarProc[ 3 ];
 #endif
 
 
-static LRESULT OnMouseWheel( HWND hTrack, WPARAM wParam )
+LRESULT TB_OnMouseWheel( HWND hTrack, WPARAM wParam )
 {
 	const int delta = ( GET_WHEEL_DELTA_WPARAM( wParam ) <= 0 )? +1 : -1 ;
 	const int iMax = (int) SendMessage( hTrack, TBM_GETRANGEMAX, 0, 0 );
@@ -65,26 +65,26 @@ static LRESULT OnMouseWheel( HWND hTrack, WPARAM wParam )
 			MAKEWPARAM( ( delta==+1? TB_LINEDOWN : TB_LINEUP ), 0 ),
 			(LPARAM) hTrack );
 	}
-	return 0;
+	return (LRESULT) FALSE;
 }
 
 static LRESULT CALLBACK TrackbarSubProc0( HWND hTrack,
 								  UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
-	if( uMessage == WM_MOUSEWHEEL ) return OnMouseWheel( hTrack, wParam );
+	if( uMessage == WM_MOUSEWHEEL ) return TB_OnMouseWheel( hTrack, wParam );
 	
 	return CallWindowProc( PrevTrackbarProc[ 0 ], hTrack, uMessage, wParam, lParam );
 }
 static LRESULT CALLBACK TrackbarSubProc1( HWND hTrack,
 								  UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
-	if( uMessage == WM_MOUSEWHEEL ) return OnMouseWheel( hTrack, wParam );
+	if( uMessage == WM_MOUSEWHEEL ) return TB_OnMouseWheel( hTrack, wParam );
 	return CallWindowProc( PrevTrackbarProc[ 1 ], hTrack, uMessage, wParam, lParam );
 }
 static LRESULT CALLBACK TrackbarSubProc2( HWND hTrack,
 								  UINT uMessage, WPARAM wParam, LPARAM lParam )
 {
-	if( uMessage == WM_MOUSEWHEEL ) return OnMouseWheel( hTrack, wParam );
+	if( uMessage == WM_MOUSEWHEEL ) return TB_OnMouseWheel( hTrack, wParam );
 	return CallWindowProc( PrevTrackbarProc[ 2 ], hTrack, uMessage, wParam, lParam );
 }
 

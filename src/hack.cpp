@@ -83,7 +83,7 @@ static int Hack_Worker( LPVOID lpVoid )
 
 	_tcscpy_s( ppszStatus[ 2 + iMyId * 4 ], cchStatus, lpszEnemyPath );
 
-#if !defined( _UNICODE )
+#if 0// !defined( _UNICODE ) // ANSIFIX@20140307(3/5)
 	// for watching...
 	if( iMyId == 2 && strlen( lpszEnemyPath ) >= 19 )
 	{
@@ -130,7 +130,9 @@ static int Hack_Worker( LPVOID lpVoid )
 		else // !hProcess
 		{
 			WriteDebugLog( TEXT( "OpenProcess failed." ) );
-
+TCHAR s[100];
+_stprintf_s(s,100,_T("OpenProcess failed.\ndwTargetProcessId=%lu\n"),dwTargetProcessId);
+OutputDebugString(s);
 			if( g_bHack[ 3 ] )
 			{
 				g_bHack[ 3 ] = UNWATCH_NOW;
@@ -205,7 +207,7 @@ static int Hack_Worker( LPVOID lpVoid )
 			dwOuterLoops < 0xFFFFffff ? ++dwOuterLoops : dwOuterLoops = 1L )
 	{
 		ptrdiff_t numOfThreads = 0;
-		DWORD * pThreadIDs = ListProcessThreads_Alloc( dwTargetProcessId, &numOfThreads );
+		DWORD * pThreadIDs = ListProcessThreads_Alloc( dwTargetProcessId, numOfThreads );
 
 		if( ! pThreadIDs )
 			break;
@@ -273,8 +275,8 @@ static int Hack_Worker( LPVOID lpVoid )
 		}
 
 		_stprintf_s( ppszStatus[ 1 + iMyId * 4 ], cchStatus,
-					_T( "Process ID = 0x%04X %04X [ %d Thread%s ]" ),
-					HIWORD( dwTargetProcessId ), LOWORD( dwTargetProcessId ), (int) numOfThreads,
+					_T( "Process ID = %lu [ %d Thread%s ]" ),
+					dwTargetProcessId, (int) numOfThreads,
 					( numOfThreads != 1 ) ? _T("s") : _T("") );
 		GetLocalTime( &st );
 		if( numOfThreads != iPrevThreadCount || errorflags )
@@ -305,11 +307,22 @@ static int Hack_Worker( LPVOID lpVoid )
 			HeapFree( GetProcessHeap(), 0L, pThreadIDs );
 			break;
 		}
-
+/*
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+#define THREAD_ALL_ACCESS         (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | \
+                                   0xFFFF)
+#else
+#define THREAD_ALL_ACCESS         (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | \
+                                   0x3FF)
+#endif
+*/
+#define TEST2_ACCESS         (STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | \
+                                   0xFFFF)
 		ptrdiff_t numOfOpenedThreads = 0;
 		for( i = 0; i < numOfThreads; ++i )
 		{
 			pThreadHandles[ i ] = OpenThread( THREAD_SUSPEND_RESUME, FALSE, pThreadIDs[ i ] );
+//			pThreadHandles[ i ] = OpenThread( TEST2_ACCESS, FALSE, pThreadIDs[ i ] );
 			if( ! pThreadHandles[ i ] )
 			{
 				_stprintf_s( msg, _countof(msg),
@@ -556,16 +569,21 @@ static int Hack_Worker( LPVOID lpVoid )
 			{
 				for( i = 0; i < numOfThreads; ++i )
 				{
-					if( pThreadHandles[ i ] && SuspendThread( pThreadHandles[ i ] ) == (DWORD) -1 )
+					if( pThreadHandles[ i ] )
 					{
-						errorflags |= ERR_SUSPEND;
-						_stprintf_s( msg, _countof(msg),
-									_T( "Target #%d : SuspendThread failed (Thread #%03d) : Retry=%d" ),
-									iMyId + 1, (int) i + 1, iSuspendThreadRetry );
-						WriteDebugLog( msg );
+						if( SuspendThread( pThreadHandles[ i ] ) == (DWORD) -1 )
+						{
+							UINT err = GetLastError();
+							errorflags |= ERR_SUSPEND;
+							_stprintf_s( msg, _countof(msg),
+								_T( "Target #%d : SuspendThread failed (Thread #%03d) : Retry=%d : err=%u" ),
+										iMyId + 1, (int) i + 1, iSuspendThreadRetry, err );
+							WriteDebugLog( msg );
+						}
+						else fSuspended = true;
 					}
 				}
-				fSuspended = true;
+				//fSuspended = true; //20140204
 			}
 
 			if( errorflags & ERR_SUSPEND )
@@ -592,10 +610,11 @@ static int Hack_Worker( LPVOID lpVoid )
 				{
 					if( pThreadHandles[ i ] && ResumeThread( pThreadHandles[ i ] ) == (DWORD) -1 )
 					{
+						UINT err = GetLastError();
 						errorflags |= ERR_RESUME;
 						_stprintf_s( msg, _countof(msg),
-									_T( "Target #%d : ResumeThread failed: Thread #%03d, ThreadId 0x%08lX, iResumeThreadRetry=%d" ),
-									iMyId + 1, (int) i + 1, pThreadIDs[ i ], iResumeThreadRetry );
+							_T( "Target #%d : ResumeThread failed: Thread #%03d, ThreadId 0x%08lX, iResumeThreadRetry=%d : err=%u" ),
+									iMyId + 1, (int) i + 1, pThreadIDs[ i ], iResumeThreadRetry, err );
 						WriteDebugLog( msg );
 					}
 				}
@@ -789,10 +808,6 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 	static HFONT hfontPercent = NULL;
 	static HFONT hfontUnit = NULL;
 
-#if defined(_MSC_VER) && 1400 <= _MSC_VER
-	//__assume( message == WM_INITDIALOG || hWnd != NULL );
-#endif
-
 	switch (message)
 	{
 		case WM_INITDIALOG:
@@ -800,7 +815,7 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 			lpszWindowText = (TCHAR*) HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, MAX_WINDOWTEXT * sizeof(TCHAR) );
 			if( ! lParam || ! lpszWindowText )
 			{
-				EndDialog( hDlg, FALSE );
+				EndDialog( hDlg, FALSE ); // lpszWindowText won't memory-leak
 				break;
 			}
 			g_hSettingsDlg = hDlg;
@@ -817,21 +832,21 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					IS_JAPANESEo ? S_JPNo_1002 : S_JPN_1002,
-					-1, lpszWindowText, MAX_WINDOWTEXT - 1 );
+					-1, lpszWindowText, MAX_WINDOWTEXT );
 				SetWindowText( hDlg, lpszWindowText );
 			}
 			else if( IS_FRENCH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					S_FRE_1002,
-					-1, lpszWindowText, MAX_WINDOWTEXT - 1 );
+					-1, lpszWindowText, MAX_WINDOWTEXT );
 				SetWindowText( hDlg, lpszWindowText );
 			}
 			else if( IS_SPANISH )
 			{
 				MultiByteToWideChar( CP_UTF8, MB_CUTE,
 					S_SPA_1002,
-					-1, lpszWindowText, MAX_WINDOWTEXT - 1 );
+					-1, lpszWindowText, MAX_WINDOWTEXT );
 				SetWindowText( hDlg, lpszWindowText );
 			}
 			else
@@ -879,6 +894,7 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 				TEXT(" THROTTLE MORE, making the target SLOWER." )
 			);
 #endif
+
 			_settings_init( hDlg );
 			break;
 		}
@@ -952,7 +968,7 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 
 				g_Slider[ k ] = (int) lSlider;
 
-				TCHAR strPercent[ 32 ];
+				TCHAR strPercent[ 32 ] = _T("");
 				GetPercentageString( lSlider, strPercent, _countof(strPercent) );
 				SetDlgItemText( hDlg, IDC_TEXT_PERCENT1 + k, strPercent );
 				
@@ -990,14 +1006,15 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 				case IDC_BUTTON_STOP3:
 				{
 					const int k = id - IDC_BUTTON_STOP1;
-					const bool fActive = ! g_bHack[ k ]; // new state when toggled
-					TCHAR strBtnText[ 32 ];
+					const bool fActivate = ! g_bHack[ k ]; // new state when toggled
+					TCHAR strBtnText[ 32 ] = _T("");
 					_stprintf_s( strBtnText, _countof(strBtnText),
 								_T("%s #&%d"),
-								fActive ? _T("Unlimit") : _T("Limit"),
+								fActivate ? _T("Unlimit") : _T("Limit"),
 								k + 1 );
 
-					SendMessage( g_hWnd, fActive ? WM_USER_RESTART : WM_USER_STOP, (WPARAM) k, 0 );
+					// WM_USER_RESTART gets sema on its own
+					SendMessage( g_hWnd, fActivate ? WM_USER_RESTART : WM_USER_STOP, (WPARAM) k, 0 );
 					SetDlgItemText( hDlg, IDC_BUTTON_STOP1 + k, strBtnText );
 					break;
 				}
@@ -1136,7 +1153,7 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 BOOL Unfreeze( HWND hWnd, DWORD dwProcessID )
 {
 	ptrdiff_t numOfThreads = 0;
-	DWORD * pThreadIDs = ListProcessThreads_Alloc( dwProcessID, &numOfThreads );
+	DWORD * pThreadIDs = ListProcessThreads_Alloc( dwProcessID, numOfThreads );
 	
 	if( ! pThreadIDs )
 		return FALSE;
@@ -1176,11 +1193,26 @@ BOOL Unfreeze( HWND hWnd, DWORD dwProcessID )
 				CloseHandle( hThread );
 				continue;
 			}
-			
-			_stprintf_s( line, _countof(line),
-						_T( "Thread #%3d (0x%08lX) opened.\tPrevious suspend count = %lu\r\n" ),
-						(int) i + 1, pThreadIDs[ i ], dwPreviousSuspendCount );
-			_tcscat_s( lpMessage, cchMessage, line );
+		
+			if( numOfThreads < 64 )
+			{
+				_stprintf_s( line, _countof(line),
+						_T( "Thread #%3d (0x%08lX) opened\tPrevious suspend count = %lu\r\n" ),
+						(int) i + 1, 
+						pThreadIDs[ i ],
+						dwPreviousSuspendCount );
+
+				_tcscat_s( lpMessage, cchMessage, line );
+			}
+			else if( numOfThreads < 256 )
+			{
+				_stprintf_s( line, _countof(line),
+						_T( "Thread #%3d OK, Prev count %lu; " ),
+						(int) i + 1,
+						dwPreviousSuspendCount );
+
+				_tcscat_s( lpMessage, cchMessage, line );
+			}
 
 			const DWORD dwCurrentSuspendCount = dwPreviousSuspendCount + 1L;
 			for( DWORD n = 0L; n < dwCurrentSuspendCount; ++n )
@@ -1247,39 +1279,35 @@ VOID AdjustLength( LPTSTR strPath )
 	}
 }
 
-static DWORD GetPrivilegeAttributes( HANDLE hToken, LUID * pLuid )
-{
-	HMODULE hModule = SafeLoadLibrary( _T("Advapi32.dll") );
-	if( ! hModule ) return 0L;
-
-	DWORD dwAttributes = 0L; // ret val
 
 typedef BOOL (WINAPI *GetTokenInformation_t)(HANDLE,TOKEN_INFORMATION_CLASS,LPVOID,DWORD,PDWORD);
+extern GetTokenInformation_t g_pfnGetTokenInformation;
+static DWORD GetPrivilegeAttributes( HANDLE hToken, LUID * pLuid )
+{
+	DWORD dwAttributes = 0L; // ret val
 
-	GetTokenInformation_t Info = (GetTokenInformation_t)
-								(void*) GetProcAddress( hModule, "GetTokenInformation" );
-
-	DWORD cbPrivs = 0L;
+	DWORD cbPrivs = 0;
 	// GetTokenInformation returns FALSE in this case with ERROR_INSUFFICIENT_BUFFER (122);
 	// MS sample assumes the same:
 	// e.g. http://msdn.microsoft.com/en-us/library/windows/desktop/aa446670%28v=vs.85%29.aspx
 	// Since this behavior is not well documented, I'll just check cbPrivs!=0
 #ifdef Like_Microsoft_LogonSID_sample_code
-	if( Info
-		&& ! (*Info)( hToken, TokenPrivileges, NULL, 0L, &cbPrivs )
+	if( g_pfnGetTokenInformation
+		&& ! g_pfnGetTokenInformation( hToken, TokenPrivileges, NULL, 0L, &cbPrivs )
 		&& GetLastError() == ERROR_INSUFFICIENT_BUFFER )
 #else
-	if( Info && (*Info)( hToken, TokenPrivileges, NULL, 0L, &cbPrivs ), cbPrivs )
+	if( g_pfnGetTokenInformation
+		&& (*g_pfnGetTokenInformation)( hToken, TokenPrivileges, NULL, 0L, &cbPrivs ), cbPrivs )
 #endif
 	{
-		TOKEN_PRIVILEGES * lpPrivs = (TOKEN_PRIVILEGES*) HeapAlloc( GetProcessHeap(),
-																	0L,
-																	cbPrivs );
+		TOKEN_PRIVILEGES * lpPrivs
+			= (TOKEN_PRIVILEGES*) HeapAlloc( GetProcessHeap(), 0, cbPrivs );
 		if( lpPrivs )
 		{
 			DWORD cbWritten;
 			lpPrivs->PrivilegeCount = 0L;
-			Info( hToken, TokenPrivileges, lpPrivs, cbPrivs, &cbWritten );
+			(*g_pfnGetTokenInformation)( hToken, TokenPrivileges, lpPrivs, cbPrivs, &cbWritten );
+			
 			for( DWORD n = 0L; n < lpPrivs->PrivilegeCount; ++n )
 			{
 				if( lpPrivs->Privileges[ n ].Luid.LowPart == pLuid->LowPart
@@ -1289,15 +1317,19 @@ typedef BOOL (WINAPI *GetTokenInformation_t)(HANDLE,TOKEN_INFORMATION_CLASS,LPVO
 					break;
 				}
 			}
-			HeapFree( GetProcessHeap(), 0L, lpPrivs );
+
+			HeapFree( GetProcessHeap(), 0, lpPrivs );
 		}
 	}
 	
-	FreeLibrary( hModule );
-
 	return dwAttributes;
 }
 
+typedef BOOL (WINAPI *LookupPrivilegeValue_t)(LPCTSTR,LPCTSTR,PLUID);
+typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
+																	 DWORD,PTOKEN_PRIVILEGES,PDWORD);
+extern LookupPrivilegeValue_t g_pfnLookupPrivilegeValue;
+extern AdjustTokenPrivileges_t g_pfnAdjustTokenPrivileges;
 BOOL SetDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes )
 {
 	WriteDebugLog( bEnable? _T( "SetDebugPrivilege TRUE" ) : _T( "SetDebugPrivilege FALSE" ) );
@@ -1305,23 +1337,13 @@ BOOL SetDebugPrivilege( HANDLE hToken, BOOL bEnable, DWORD * pPrevAttributes )
 //	if( pPrevAttributes )
 //		*pPrevAttributes = 0L;//--20131015
 	
-	HMODULE hModule = SafeLoadLibrary( _T("Advapi32.dll") );
-	if( ! hModule ) return FALSE;
-
 	BOOL bRet = FALSE;
 	DWORD dwPrevAttributes = 0L;
 
-typedef BOOL (WINAPI *LookupPrivilegeValue_t)(LPCTSTR,LPCTSTR,PLUID);
-	LookupPrivilegeValue_t Lookup = (LookupPrivilegeValue_t)(void*)
-									GetProcAddress( hModule, "LookupPrivilegeValue" WorA_ );
-
-typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
-																	 DWORD,PTOKEN_PRIVILEGES,PDWORD);
-	AdjustTokenPrivileges_t Adjust = (AdjustTokenPrivileges_t)(void*)
-									GetProcAddress( hModule, "AdjustTokenPrivileges" );
-
 	LUID Luid;
-    if( Lookup && Adjust && (*Lookup)( NULL, SE_DEBUG_NAME, &Luid ) )
+    if( g_pfnLookupPrivilegeValue
+		&& g_pfnAdjustTokenPrivileges
+		&& (*g_pfnLookupPrivilegeValue)( NULL, SE_DEBUG_NAME, &Luid ) )
 	{
 		dwPrevAttributes = GetPrivilegeAttributes( hToken, &Luid );
 		DWORD dwNewAttributes = 0L;
@@ -1331,7 +1353,7 @@ typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
 		}
 		else
 		{
-			if( pPrevAttributes ) // todo: this is not needed at all
+			if( pPrevAttributes )
 				dwNewAttributes = *pPrevAttributes;
 			else
 				dwNewAttributes = (dwPrevAttributes & ~((DWORD)SE_PRIVILEGE_ENABLED));
@@ -1343,27 +1365,29 @@ typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
 		tp.Privileges[ 0 ].Attributes = dwNewAttributes;
 
 		TOKEN_PRIVILEGES tpPrev = {0};
+
 		DWORD cbPrev;
 		
 		SetLastError( 0L );
-		(*Adjust)( hToken, FALSE, &tp, (DWORD) sizeof(tpPrev), &tpPrev, &cbPrev );
+		(*g_pfnAdjustTokenPrivileges)( hToken, FALSE, &tp, (DWORD) sizeof(tpPrev), &tpPrev, &cbPrev );
 		
-		// ret.val. of Adjust itself is not reliable; one needs to do this.
+		// ret.val. of Adjust itself is not reliable; we need to do this...
 		bRet = ( GetLastError() == ERROR_SUCCESS );
 
 #ifdef _DEBUG
-		WCHAR s[100];
-		swprintf_s(s,100,L"TID%08lX [Enable=%d] Attr %08lX [prev=%08lX] to %08lX (result=%lu err=%lu bRet=%d) TEST=%d\n",
+		TCHAR s[200];
+		_stprintf_s(s,200,
+			_T("TID%08lX [Enable=%d] Attr %08lX [prev=%08lX](cb=%d) to %08lX (result=%lu err=%lu bRet=%d)\n"),
 			GetCurrentThreadId(),
 			bEnable,
 			dwPrevAttributes,
 			tpPrev.Privileges[0].Attributes,
+			cbPrev,
 			dwNewAttributes,
 			tpPrev.PrivilegeCount,
 			GetLastError(),
-			bRet,
-			pPrevAttributes&&(dwPrevAttributes & ~((DWORD)SE_PRIVILEGE_ENABLED))==*pPrevAttributes);
-		OutputDebugStringW(s);
+			bRet);
+		OutputDebugString(s);
 #endif
 	}
 
@@ -1373,30 +1397,26 @@ typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
 	if( bRet )
 		WriteDebugLog( _T( "Success!" ) );
 
-	FreeLibrary( hModule );
-
 	return bRet;
 }
 
+typedef BOOL (WINAPI *OpenThreadToken_t)(HANDLE,DWORD,BOOL,PHANDLE);
+typedef BOOL (WINAPI *ImpersonateSelf_t)(SECURITY_IMPERSONATION_LEVEL);
+extern OpenThreadToken_t g_pfnOpenThreadToken;
+extern ImpersonateSelf_t g_pfnImpersonateSelf;
 BOOL EnableDebugPrivilege( HANDLE * phToken, DWORD * pPrevAttributes )
 {
-	if( ! phToken ) return FALSE;
-
-	HMODULE hModule = SafeLoadLibrary( _T("Advapi32.dll") );
-	if( ! hModule ) return FALSE;
+	if( ! phToken || ! g_pfnOpenThreadToken || ! g_pfnImpersonateSelf )
+		return FALSE;
 
 	BOOL bPriv = FALSE; // ret val
 
-typedef BOOL (WINAPI *OpenThreadToken_t)(HANDLE,DWORD,BOOL,PHANDLE);
-	OpenThreadToken_t OpenTT = (OpenThreadToken_t)(void*)
-									GetProcAddress( hModule, "OpenThreadToken" );
-typedef BOOL (WINAPI *ImpersonateSelf_t)(SECURITY_IMPERSONATION_LEVEL);
-	ImpersonateSelf_t Impersonate = (ImpersonateSelf_t)(void*)
-									GetProcAddress( hModule, "ImpersonateSelf" );
-
 	SetLastError( 0L );
-	BOOL bToken = OpenTT && (*OpenTT)( GetCurrentThread(), 
-									TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, TRUE, phToken );
+	BOOL bToken = (*g_pfnOpenThreadToken)(
+						GetCurrentThread(), 
+						TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+						TRUE,
+						phToken );
 	if( bToken )
 	{
 		WriteDebugLog( _T( "OpenThreadToken OK" ) );
@@ -1415,10 +1435,10 @@ typedef BOOL (WINAPI *ImpersonateSelf_t)(SECURITY_IMPERSONATION_LEVEL);
 			WriteDebugLog( tmpstr );
 		}
 		
-      //if(           Impersonate && Impersonate( SecurityImpersonation ) ) //--20131015
-		if( OpenTT && Impersonate && Impersonate( SecurityImpersonation ) ) //++
+		if( (*g_pfnImpersonateSelf)( SecurityImpersonation ) ) //++
 		{
-			bToken = (*OpenTT)( GetCurrentThread(), 
+			bToken = (*g_pfnOpenThreadToken)( 
+								GetCurrentThread(), 
 								TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, FALSE, phToken );
 		}
 		else
@@ -1439,7 +1459,6 @@ typedef BOOL (WINAPI *ImpersonateSelf_t)(SECURITY_IMPERSONATION_LEVEL);
 		*phToken = NULL;
 	}
 
-	FreeLibrary( hModule );
 	return bPriv;
 }
 

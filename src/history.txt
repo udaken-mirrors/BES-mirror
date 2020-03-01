@@ -679,8 +679,10 @@ http://support.microsoft.com/kb/131065
 [FIX] hack.cpp: SetDebugPrivilege: "*pPrevAttributes = 0L" bug.
 - Do not set pPrevAttributes=0; we might use the original value.
 - This was almost harmless b/c *pPrev is typically 0 anyway.
+  (However, because of the change on 2013-10-08, "restoring prev=2" is possible on
+   Unfreeze.  Without this fix, 0 would be "restored" instead of 2.)
 - Backported to 1.6.0.
-- TODO: these funcs are not very good
+
 [MOD] UNIT_MIN 2.
 [MOD] Updated the static text for Sleep/Awake cycle in Control dlg.
 [MOD] Updated ShowCommandLineHelp.
@@ -696,6 +698,20 @@ http://support.microsoft.com/kb/131065
 
 2014-01-11 1.6.1 Released.
 -------------
+
+2014-02-04 (1.6.2test)
+[FIX] fSuspended was true even when !SuspendThread for every thread.
+- No real problem, though.
+- This change is not included in v1.6.2 final, but is included in 1.7.0.
+[NEW] PrintFileHeader: recognize Win8/8.1.
+- This change is not included in v1.6.2 final, but is included in 1.7.0.
+
+2014-03-02 (1.7test1)
+[MOD] Bigger target Dlg (IDD_XLIST -> IDD_LIST).
+[MOD] Show process ID in the target List.
+- Suggested by Antonello O. on 20140302.
+[FIX] SystemParametersInfoW to SystemParametersInfo
+[MOD] Use _snwprintf_s instead of _swprintf_s in _add_item.
 
 2014-03-02 (1.6.2pre)*
 (!)[FIX] List All/Normal List was broken on 2013-10-08.
@@ -713,44 +729,146 @@ http://support.microsoft.com/kb/131065
 [FIX] Added HEAP_ZERO_MEMORY in two places on WM_INITDIALOG.
 - This would help if MultiByteToWideChar should fail.
 
+2014-03-03 (1.7test1.1)
+[MOD] _add_item: slightly better algo.
+[MOD] MAX_WINDOWTEXT 1024 to 256.
+- 1024 was unnecessarily large, wasting memory.
+[MOD] Comment out unused MAX_THREAD_CNT macro.
+[NEW] Nuke button.
+- Suggested by Antonello O. on 20140302.
+[MOD] KeyboardHookProc revised; THIS_BUTTON_IS_DISABLED macro removed.
+
+2014-03-04 (1.7test1.2)
+[MOD] "Shirase" to "Shirase'" with an accent mark on "e"
+[NEW] Now you can watch/limit an already limited target.
+- As long as the watch slot (#3) is free and one regular slot (#0, 1 or 2) is free.
+[MOD] OnContextMenu: tweaked b/c list item text format has been changed on 20140302.
+[MOD] KeyboardHookProc: add SetDlgItemFocus.
+[MOD] Target ListBox to ListView.
+
+2014-03-05 (1.7test1.3)
+[NEW] ListView is now sortable.
+- Suggested by Antonello O. on 20140302.
+[FIX] Hanadle WM_SETFOCUS properly in main when a child dlg box is there.
+[NEW] GetProcessTimes (test).
+
 2014-03-06 (1.7test1.4)*
 (!)[FIX] Stale fThisIsBES flag on UpdateProcessSnap.
 - This resulted in a "fake BES" process that was not selectable as target, when all processes
   were listed and the list was refreshed.  Perhaps an old bug.
 - HOTFIX also in 1.6.2.
+[NEW] Now the Target List shows CPU load properly, and sortable by it too.
+- Not optimized but it's working. 48ms (DEBUG 58ms) /refresh.
+- Suggested by Antonello O. on 20140302.
 (!)[FIX] IFF: Potentially overlapping _tcscpy_s (dst==src) in 5 places.
 - Fixed with a macro, Tcscpy_s.
 - This might have been related to my memo "IFF not saved unless exited immediately?"
 - Also backported to 1.6.2.
 
+2014-03-07 (1.7test2 [v1.7.0.2])
+[MOD] Faster IsProcessBES handling. (still to do***)
+[MOD] ANSI build: watch like UNICODE build.
+- Before, ANSI build used only exe name, not full path, when watching.  Furthermore,
+  it used only the first 15 cch, if cch of exe name is >=19.  This is because of
+  some limitation of non-Unicode, but basically, this can be changed so that both builds
+  work more or less similarly.
+- 5 ANSIFIXes: 2 in watch.cpp; 1 in hack.cpp; 2 in list.cpp.
+- 20140309: additional 2 fixes: ANSIFIX6/7 in ini.cpp.
+- This change is not backported to 1.6.2, since the old behavior is not a bug either.
+- As of 1.6.1, ANSI build is not included anyway. Older ver. like 1.5.2 ANSI has the same pb.
+[MOD] FOE_COLOR from red to purple.
+[MOD] Normal List: basically only hide "System" and "BES.exe"
+[MOD] CacheProcessThreads_Alloc, GetProcessDetails2: Minor optimizations.
+- First one is now called AllocSortedPairs.
+[MOD] Show PID in decimal, not in hex, in the main UI.
+[FIX] Bugs in 2014-03-04 (watch what's already been limited).
+
 2014-03-07 (1.6.2/1.7test2.1)
 [FIX] (v1.6.2) Always use SafeLoadLibrary in LoadFunctions() in list.cpp.
+[MOD] dllLoad/Unload only once in the main.
+[NEW] LVS_EX_HEADERDRAGDROP.
 
 2014-03-08 (1.6.2/1.7test2.2)
+[MOD] ListView: red ("hot") background if the item shows the target now being limited.
+[NEW] Target Dlg: can unlimit on its own (but can't relimit/limit new).
+[MOD] ListProcessThreads_Alloc: optimized a little.
 (!)[FIX] Possible use-after-free in AllocSortedPairs (ex: CacheProcessThreads_Alloc).
 - If ReAlloc failed, the old pointer was freed but not set NULL.
 - FIX also in 1.6.2.
 - Not a real problem, since the size of memory blocks here is like 100 KiB max;
   unlikely to fail to allocate.
+[MOD] GetProcessDetails2, AllocSortedPairs, UpdateProcessSnap: optimized.
+
+2014-03-09 (1.7test2.3)
+[MOD] Better way to use sorted_pairs and s_lpCPUTime.
+- About 4% faster than test2.2, about 7-9% faster than test2.
+- GetProcessDetails2 removed.
+[NEW] LV: Remember the col order and sorting algo last selected by the user.
+[NEW] Target Dlg: can limit/relimit on its own (but can't watch).
 
 2014-03-10 (1.6.2/1.7test2.4)
+[MOD] Better s_lpCPUTime handling.
+- About 0.5-1% faster than test2.3.
+[MOD] Target Dlg: quick startup (0.5 sec) with fQuickTimer.
+[MOD] LV_OnSelChange (ex: OnSelChange): cleanup.
+[FIX] Target Dlg: Tab handling may get stuck by EnableWindow.
+- If the focused control was disabled.  To avoid this, use EnableDlgItem.
+- Not ported to 1.6.2, b/c 1.6.2 is practically ok about this prb. ##todo
+[MOD] Target Dlg: can unfreeze on its own.
 [FIX] In 1.6.x and before, target info could be broken after Unfreeze.
 - That is, if slot iMyId was used for some target (X) but inactive (unlimited),
   then target info for that slot would be replaced by target info of exe that was
   unfrozen (Y); after that, if you tried to re-limit X via the Control dlg,
   Y would be limited instead.
 - Not a serious problem, but it was a bug; fixed in 1.6.2.
-- 1.7.x as of now does not use this bad code anyway.
+- 1.7.x as of now does not use the code in question anymore.
 
 2014-03-11 (1.6.2/1.7test2.5)
+[NEW] LV: columns for PATH and # of THREADS.
+- This makes it about 3~4% slower than before.
+[NEW] Target Dlg: IDM_PAUSE button (check box).
+[MOD] Target Dlg: WM_COMMAND, cleanup.
+[MOD] Nuke button (1.7test1.1) to context menu item.
+[MOD] ListView: better UI colors; LVS_EX_FULLROWSELECT emulated.
+- Looks good, but now this is slower than test2.4 by about 4~5%.
 (!)[FIX] xList: SaveDC was too late.
 - DC was saved after one new font was selected, and "restored". Not good.
 - Fixed also in 1.6.2.
+[NEW] Target Dlg: can watch/unwatch on its own.
+- Including a new possibility: when all slots are full but nothing is being
+  watched, now you can still watch one of the currently limited targets
+  (i.e. switch from the regular Limit to the Limit/Watch).
+  
+2014-03-12 (1.7test2.6)
+[MOD] IDC_PAUSE (20140311) to IDC_AUTOREFRESH.
+[MOD] xList: Slightly wider buttons.
+[MOD] SetProcessInfoMsg: simplified.
+- And now ~35% faster than test2.4!
+[NEW] xList: "Unlimit All" button.
+[NEW] Target Dlg: has Slider with Unlimit button, like in the Settings dlg.
+[MOD] Optimized: GetProcessWindowText (ex: get_process_details_worker)
+- No more using a huge WININFO arrays.
+- Possibly faster than before by ~0.5%.
+[MOD] MAX_WINDOWS_CNT 1024 to 280
+- Now only used in ShowProcessWindow.
 
-2014-03-13
+2014-03-13 (1.7test2.7)
+[MOD] GetProcessWindowText: optimized a little more.
+[FIX] A flag like STOPF_NO_INVALIDATE should be in HIWORD.
+- Becuase LOWORD is used for notification.
+- In 1.6.2 every notification code actually used in LOWORD happens to be
+   even, and STOPF_NO_INVALIDATE (0x1) is the only flag in question,
+  so older versions happen to be ok about this.
+[FIX] Target Dlg: set slider/%-text/focus properly on limit.
+[MOD] LimitPlus: tweaked; remove unnecessary UpdateStatus.
+[NEW] Target Dlg: remember position.
+[MOD] Unfreeze: tweaked.
 [MOD] Target Dlg: ensure visible on ContextMenu.
+[MOD] Def Win Pos: CW_USEDEFAULT to workarea left-top+(20,20)
 
+2014-03-14 (1.7[.0.3]-alpha)
+[MOD] Target Dlg: _init_DialogPos, _init_ListView; tweaked.
 
-2014-03-15 1.6.2 Released.
--------------
+2014-03-15 1.6.2 & 1.7.0[.3]-alpha Released.
+
 

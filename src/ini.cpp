@@ -520,23 +520,19 @@ BOOL SetSliderIni( LPCTSTR lpszString, const int iSlider )
 		return FALSE;
 	}
 
-
-
 	lstrcpy( lpszExeName, &lpszTarget[ start ] );
 	lpszExeName[ end - start ] = TEXT( '\0' );
 */
 // +1.1b7
 	PathToExe( lpszString, strExeName, MAX_PATH * 2 );
 
-
-#if !defined( _UNICODE )
+#if 0 //!defined( _UNICODE ) // ANSIFIX6
 	if( strlen( strExeName ) >= 19 )
 	{
 		strExeName[ 15 ] = '\0';
 		PathToExeEx( strExeName, MAX_PATH * 2 );
 	}
 #endif
-
 
 	TCHAR strExeNameLower[ MAX_PATH * 2 ];
 	_bes_lower( strExeName, strExeNameLower, MAX_PATH * 2 );
@@ -584,7 +580,7 @@ int GetSliderIni( LPCTSTR lpszTargetPath, HWND hWnd )
 	}
 
 	_tcscpy_s( strExeName, _countof(strExeName), &lpszTargetPath[ start ] );
-#if !defined( _UNICODE )
+#if 0 // !defined( _UNICODE ) // ANSIFIX7
 	if( strlen( strExeName ) >= 19 )
 	{
 		strExeName[ 15 ] = '\0';
@@ -650,12 +646,13 @@ VOID SetWindowPosIni( HWND hWnd )
 
 VOID GetWindowPosIni( POINT * ppt, RECT * prcWin )
 {
-	const TCHAR * strIniPath = GetIniPath();
-	LONG x = (LONG) GetPrivateProfileInt( TEXT( "Window" ), TEXT( "PosX" ), CW_USEDEFAULT, strIniPath );
-    LONG y = (LONG) GetPrivateProfileInt( TEXT( "Window" ), TEXT( "PosY" ), CW_USEDEFAULT, strIniPath );
-
 	RECT area = {0};
 	SystemParametersInfo( SPI_GETWORKAREA, 0, &area, 0 );
+
+	const TCHAR * strIniPath = GetIniPath();
+	LONG x = (LONG) GetPrivateProfileInt( TEXT( "Window" ), TEXT( "PosX" ), area.left + 20, strIniPath );
+    LONG y = (LONG) GetPrivateProfileInt( TEXT( "Window" ), TEXT( "PosY" ), area.top + 20, strIniPath );
+
 	SetRect( prcWin, 0, 0, 640, 480 );
 	AdjustWindowRect( prcWin, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE, TRUE );
 	LONG maxX = area.right - ( prcWin->right - prcWin->left );

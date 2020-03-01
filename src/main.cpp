@@ -31,6 +31,7 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 {
 	UNREFERENCED_PARAMETER( hPrevInstance );
 	UNREFERENCED_PARAMETER( lpCmdLine );
+	_prevent_dll_preloading();
 
 	g_hInst = hInstance;
 
@@ -39,8 +40,6 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 #if defined(_MSC_VER) && 1400 <= _MSC_VER
 	_set_invalid_parameter_handler( invalid_parameter_handler );
 #endif
-
-	_prevent_dll_preloading();
 
 	const DWORD dwStyle = _bes_init( nCmdShow );
 
@@ -70,7 +69,7 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 		BringWindowToTop( hWnd );
 		SetForegroundWindow( hWnd );
 		SetActiveWindow( hWnd );
-		SetFocus( hWnd );
+		SetFocus( g_hListDlg ? g_hListDlg : g_hSettingsDlg ? g_hSettingsDlg : hWnd );
 	}
 	UpdateWindow( hWnd );
 
@@ -112,19 +111,152 @@ int APIENTRY WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 typedef BOOL (WINAPI * SetDllDirectory_t)(LPCTSTR);
 static void _prevent_dll_preloading( void )
 {
-	HMODULE hModuleKernel32 = SafeLoadLibrary( _T("Kernel32.dll") );
+	// Quick-fix to prevent DLL preloading attacks
+	TCHAR szCurDir[ CCHPATH ] = _T("");
+	GetCurrentDirectory( CCHPATH, szCurDir );
+	TCHAR szSysDir[ CCHPATH ] = _T("");
+	GetSystemDirectory( szSysDir, CCHPATH );
+	SetCurrentDirectory( szSysDir );
+
+	// Real fix
+	HMODULE hModuleKernel32 = LoadLibrary( _T("Kernel32.dll") );
 	if( hModuleKernel32 )
 	{
-		SetDllDirectory_t pfnSetDllDirectory
-			= (SetDllDirectory_t)(void *) GetProcAddress( hModuleKernel32, "SetDllDirectory" WorA_ );
+		SetDllDirectory_t pfnSetDllDirectory = (SetDllDirectory_t)(void *)
+			GetProcAddress( hModuleKernel32, "SetDllDirectory" WorA_ );
 
 		// This is a better fix, but only valid for XP SP1+
 		if( pfnSetDllDirectory )
-			(*pfnSetDllDirectory)( _T("") );
+		{
+			pfnSetDllDirectory( _T("") );
+		}
 
 		FreeLibrary( hModuleKernel32 );
 	}
+
+	SetCurrentDirectory( szCurDir );
 }
+
+typedef DWORD (WINAPI *GetProcessImageFileName_t)(HANDLE,LPTSTR,DWORD);
+typedef DWORD (WINAPI *GetLogicalDriveStrings_t)(DWORD,LPTSTR);
+typedef DWORD (WINAPI *QueryDosDevice_t)(LPCTSTR,LPTSTR,DWORD);
+typedef BOOL (WINAPI *GetTokenInformation_t)(HANDLE,TOKEN_INFORMATION_CLASS,LPVOID,DWORD,PDWORD);
+typedef BOOL (WINAPI *LookupPrivilegeValue_t)(LPCTSTR,LPCTSTR,PLUID);
+typedef BOOL (WINAPI *AdjustTokenPrivileges_t)(HANDLE,BOOL,PTOKEN_PRIVILEGES,
+																	 DWORD,PTOKEN_PRIVILEGES,PDWORD);
+typedef BOOL (WINAPI *OpenThreadToken_t)(HANDLE,DWORD,BOOL,PHANDLE);
+typedef BOOL (WINAPI *ImpersonateSelf_t)(SECURITY_IMPERSONATION_LEVEL);
+typedef BOOL (WINAPI *GetProcessTimes_t)(HANDLE,LPFILETIME,LPFILETIME,LPFILETIME,LPFILETIME);
+
+     GetProcessImageFileName_t
+g_pfnGetProcessImageFileName    = NULL;
+     GetLogicalDriveStrings_t
+g_pfnGetLogicalDriveStrings     = NULL;
+     QueryDosDevice_t
+g_pfnQueryDosDevice             = NULL;
+     GetTokenInformation_t
+g_pfnGetTokenInformation        = NULL;
+     LookupPrivilegeValue_t
+g_pfnLookupPrivilegeValue       = NULL;
+     AdjustTokenPrivileges_t
+g_pfnAdjustTokenPrivileges      = NULL;
+     OpenThreadToken_t
+g_pfnOpenThreadToken            = NULL;
+     ImpersonateSelf_t
+g_pfnImpersonateSelf            = NULL;
+     GetProcessTimes_t
+g_pfnGetProcessTimes            = NULL;
+
+static HMODULE s_hModulePsapi = NULL;
+static HMODULE s_hModuleKernel32 = NULL;
+static HMODULE s_hModuleAdvapi32 = NULL;
+static void LoadFunctionPtrs( void )
+{
+	// Quick-fix to prevent DLL preloading attacks
+	TCHAR szCurDir[ CCHPATH ] = _T("");
+	GetCurrentDirectory( CCHPATH, szCurDir );
+	TCHAR szSysDir[ CCHPATH ] = _T("");
+	GetSystemDirectory( szSysDir, CCHPATH );
+	SetCurrentDirectory( szSysDir );
+
+	// Load dynamically; otherwise probably BES wouldn't run on Win2000
+	s_hModulePsapi = LoadLibrary( _T("Psapi.dll") );
+	if( s_hModulePsapi )
+	{
+		g_pfnGetProcessImageFileName = (GetProcessImageFileName_t)(void*)
+			GetProcAddress( s_hModulePsapi, "GetProcessImageFileName" WorA_ );
+	}
+
+	s_hModuleKernel32 = LoadLibrary( _T("Kernel32.dll") );
+	if( s_hModuleKernel32 )
+	{
+		g_pfnGetLogicalDriveStrings = (GetLogicalDriveStrings_t)(void*)
+			GetProcAddress( s_hModuleKernel32, "GetLogicalDriveStrings" WorA_ );
+		g_pfnQueryDosDevice = (QueryDosDevice_t)(void*)
+			GetProcAddress( s_hModuleKernel32, "QueryDosDevice" WorA_ );
+		g_pfnGetProcessTimes = (GetProcessTimes_t)(void*)
+			GetProcAddress( s_hModuleKernel32, "GetProcessTimes" );
+	}
+
+	s_hModuleAdvapi32 = LoadLibrary( _T("Advapi32.dll") );
+	if( s_hModuleAdvapi32 )
+	{
+		g_pfnGetTokenInformation = (GetTokenInformation_t) (void*)
+			GetProcAddress( s_hModuleAdvapi32, "GetTokenInformation" );
+
+		g_pfnLookupPrivilegeValue = (LookupPrivilegeValue_t)(void*)
+			GetProcAddress( s_hModuleAdvapi32, "LookupPrivilegeValue" WorA_ );
+
+		g_pfnAdjustTokenPrivileges = (AdjustTokenPrivileges_t)(void*)
+			GetProcAddress( s_hModuleAdvapi32, "AdjustTokenPrivileges" );
+
+		g_pfnOpenThreadToken = (OpenThreadToken_t)(void*)
+			GetProcAddress( s_hModuleAdvapi32, "OpenThreadToken" );
+
+		g_pfnImpersonateSelf = (ImpersonateSelf_t)(void*)
+			GetProcAddress( s_hModuleAdvapi32, "ImpersonateSelf" );
+	}
+
+	SetCurrentDirectory( szCurDir );
+#if 0
+	if(
+	g_pfnGetProcessImageFileName &&
+	g_pfnGetLogicalDriveStrings     &&
+	g_pfnQueryDosDevice              &&
+	g_pfnGetTokenInformation         &&
+	g_pfnLookupPrivilegeValue        &&
+	g_pfnAdjustTokenPrivileges       &&
+	g_pfnOpenThreadToken             &&
+	g_pfnImpersonateSelf             &&
+	g_pfnGetProcessTimes             ) OutputDebugString(_T("\tALLOK^_^\n\n\n"));
+#endif
+}
+static void UnloadFunctionPtrs( void )
+{
+	g_pfnGetLogicalDriveStrings = NULL;
+	g_pfnQueryDosDevice = NULL;
+	g_pfnGetProcessImageFileName = NULL;
+	g_pfnGetTokenInformation = NULL;
+
+	if( s_hModuleAdvapi32 )
+	{
+		FreeLibrary( s_hModuleAdvapi32 );
+		s_hModuleAdvapi32 = NULL;
+	}
+
+	if( s_hModuleKernel32 )
+	{
+		FreeLibrary( s_hModuleKernel32 );
+		s_hModuleKernel32 = NULL;
+	}
+
+	if( s_hModulePsapi )
+	{
+		FreeLibrary( s_hModulePsapi );
+		s_hModulePsapi = NULL;
+	}
+}
+
 
 static DWORD _bes_init( int& nCmdShow )
 {
@@ -140,6 +272,18 @@ static DWORD _bes_init( int& nCmdShow )
 	if( IsOptionSet( strOptions, _T("--help"), _T("-h") )
 		|| IsOptionSet( strOptions, _T("/?"), NULL ) )
 	{
+#if 0
+		const TCHAR str[]= APP_LONGNAME _T("\n\n");
+		
+		HANDLE hStd = GetStdHandle(STD_OUTPUT_HANDLE);
+		AttachConsole( ATTACH_PARENT_PROCESS );
+		
+		DWORD cb;
+		WriteConsole( hStd, str,_countof(str),&cb,NULL);
+		FreeConsole();
+
+		CloseHandle( hStd );
+#endif
 		ShowCommandLineHelp( NULL );
 		return 0;
 	}
@@ -153,9 +297,11 @@ static DWORD _bes_init( int& nCmdShow )
 	if( IsOptionSet( strOptions, _T("--disallow-multi"), NULL ) )
 		bAllowMulti = FALSE;
 
+
+
+
 	if( bMinimize )
 	{
-		//WriteDebugLog( _T( "SW_HIDE" ) );
 		nCmdShow = SW_SHOWMINNOACTIVE;
 	}
 
@@ -273,7 +419,8 @@ static DWORD _bes_init( int& nCmdShow )
 		return 0UL;
 	}
 
-	g_hMutexDLL = CreateMutex( NULL, FALSE, NULL );
+	//g_hMutexDLL = CreateMutex( NULL, FALSE, NULL );
+	LoadFunctionPtrs();
 
 	INITCOMMONCONTROLSEX iccex; 
 	iccex.dwICC = ICC_WIN95_CLASSES;
@@ -312,11 +459,12 @@ static void _bes_uninit( void )
 		g_hWnd = NULL;
 	}
 
-	if( g_hMutexDLL )
+	/*if( g_hMutexDLL )
 	{
 		CloseHandle( g_hMutexDLL );
 		g_hMutexDLL = NULL;
-	}
+	}*/
+	UnloadFunctionPtrs();
 		
 	OleUninitialize();
 	CloseDebugLog();
@@ -382,11 +530,11 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 				// SendMessage may time out if the dialogbox is there but is about to be destroyed.
 				if( g_hListDlg )
 					SendMessageTimeout( g_hListDlg, WM_COMMAND, IDCANCEL, 0,
-										SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, NULL );
+										SMTO_NORMAL | SMTO_ABORTIFHUNG, 500, NULL );
 			
 				if( g_hSettingsDlg )
 					SendMessageTimeout( g_hSettingsDlg, WM_COMMAND, IDCANCEL, 0,
-										SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, NULL );
+										SMTO_NORMAL | SMTO_ABORTIFHUNG, 500, NULL );
 			
 				ShowWindow( g_hWnd, SW_HIDE );
 				return 1;
@@ -419,24 +567,60 @@ static LRESULT CALLBACK KeyboardHookProc( int nCode, WPARAM wParam, LPARAM lPara
 		}
 
 		int wId = -1;
-
-		if( wParam == _T('L') ) wId = IDOK;
-		else if( wParam == _T('W') ) wId = IDC_WATCH;
+		if( wParam == _T('A') ) wId = IDC_LISTALL_SYS;
+		//else if( wParam == _T('B') ) wId = -1; // Boss key
 		else if( wParam == _T('C') ) wId = IDCANCEL;
-		else if( wParam == _T('H') ) wId = IDC_HIDE;
-		else if( wParam == _T('S') ) wId = IDC_SHOW;
-		else if( wParam == _T('K') ) wId = IDC_SHOW_MANUALLY;
-		else if( wParam == _T('A') ) wId = IDC_LISTALL_SYS;
+		else if( wParam == _T('E') ) wId = IDC_AUTOREFRESH;
 		else if( wParam == _T('F') ) wId = IDC_FRIEND;
-		else if( wParam == _T('U') ) wId = IDC_RESET_IFF;
+		else if( wParam == _T('H') ) wId = IDC_HIDE;
+		else if( wParam == _T('I') ) wId = IDC_SLIDER_BUTTON;
+		else if( wParam == _T('K') ) wId = IDC_SHOW_MANUALLY;
+		else if( wParam == _T('L') ) wId = IDOK;
+		else if( wParam == _T('M') ) wId = IDC_UNLIMIT_ALL;
 		else if( wParam == _T('O') ) wId = IDC_FOE;
+		//else if( wParam == _T('R') ) wId = IDC_RELOAD;
+		else if( wParam == _T('S') ) wId = IDC_SHOW;
+		else if( wParam == _T('U') ) wId = IDC_RESET_IFF;
+		else if( wParam == _T('W') ) wId = IDC_WATCH;
 		else if( wParam == _T('Z') ) wId = IDC_UNFREEZE;
-		else if( wParam >= _T('A') && wParam <= _T('Z') ) return 1;
+		else if( wParam >= _T('A') && wParam <= _T('Z') ) wId = -1;
 		else return CallNextHookEx( hKeyboardHook, nCode, wParam, lParam );
 
-		if( SendMessageTimeout( g_hListDlg, WM_COMMAND, MAKEWPARAM( wId, BN_CLICKED ), 
-								(LPARAM) GetDlgItem( g_hListDlg, wId ),
-								SMTO_NORMAL | SMTO_ABORTIFHUNG, 1000, NULL ) ) return 1;
+		if( wId != -1 )
+		{
+			HWND hwndCtrl = GetDlgItem( g_hListDlg, wId );
+			if( IsWindowEnabled( hwndCtrl ) )
+			{
+				DWORD_PTR result;
+
+				if( wId == IDC_AUTOREFRESH )
+				{
+					SendMessageTimeout( hwndCtrl, BM_GETCHECK,
+										(WPARAM) 0, (LPARAM) 0,
+										SMTO_NORMAL | SMTO_ABORTIFHUNG, 500, &result );
+					
+					SendMessageTimeout( hwndCtrl, BM_SETCHECK,
+										(WPARAM) ! result, (LPARAM) 0,
+										SMTO_NORMAL | SMTO_ABORTIFHUNG, 500, NULL );
+				}
+
+				// SetDlgItemFocusNow
+				if( wId != IDOK
+					&& wId != IDC_WATCH
+					&& wId != IDC_SLIDER_BUTTON
+					&& wId != IDC_HIDE && wId != IDC_SHOW )
+				{
+					SendMessageTimeout( g_hListDlg, WM_NEXTDLGCTL,
+										(WPARAM) hwndCtrl, MAKELPARAM( TRUE, 0 ),
+										SMTO_NORMAL | SMTO_ABORTIFHUNG, 500, NULL );
+				}
+
+				SendMessageTimeout( g_hListDlg, WM_COMMAND,
+									MAKEWPARAM( wId, BN_CLICKED ), (LPARAM) hwndCtrl,
+									SMTO_NORMAL | SMTO_ABORTIFHUNG, 500, NULL );
+			}
+		}
+		return 1;
 	}
 
 	return CallNextHookEx( hKeyboardHook, nCode, wParam, lParam );

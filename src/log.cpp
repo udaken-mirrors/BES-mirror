@@ -50,6 +50,25 @@ BOOL OpenDebugLog()
 	return TRUE;
 }
 
+BOOL VerifyOSVer( DWORD dwMajor, DWORD dwMinor, int iSP )
+{
+	OSVERSIONINFOEX osvi = {0};
+	osvi.dwOSVersionInfoSize = sizeof(osvi);
+	osvi.dwMajorVersion = dwMajor;
+	osvi.dwMinorVersion = dwMinor;
+	osvi.wServicePackMajor = (WORD) iSP;
+	osvi.wServicePackMinor = (WORD) 0;
+	ULONGLONG qwMask = 0;
+	qwMask = VerSetConditionMask( qwMask, VER_MAJORVERSION, VER_GREATER_EQUAL );
+	qwMask = VerSetConditionMask( qwMask, VER_MINORVERSION, VER_GREATER_EQUAL );
+	qwMask = VerSetConditionMask( qwMask, VER_SERVICEPACKMAJOR, VER_GREATER_EQUAL );
+	qwMask = VerSetConditionMask( qwMask, VER_SERVICEPACKMINOR, VER_GREATER_EQUAL );
+
+	return VerifyVersionInfo( &osvi, 
+		VER_MAJORVERSION | VER_MINORVERSION | VER_SERVICEPACKMAJOR | VER_SERVICEPACKMINOR,
+		(DWORDLONG) qwMask );
+}
+
 BOOL PrintFileHeader( FILE * fp )
 {
 	_fputts( APP_LONGNAME, fp );
@@ -76,6 +95,8 @@ BOOL PrintFileHeader( FILE * fp )
 		tz_sign > 0 ? _T( "+" ) : _T( "-" ), tz_h, tz_m,
 		GetCurrentProcessId() );
 
+
+
 	OSVERSIONINFO osvi;
 	osvi.dwOSVersionInfoSize = sizeof( OSVERSIONINFO );
 	GetVersionEx( &osvi );
@@ -92,22 +113,23 @@ BOOL PrintFileHeader( FILE * fp )
 	if( osvi.dwMajorVersion == 5UL )
 	{
 		if( osvi.dwMinorVersion == 0UL )
-			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "Windows 2000" ) );
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "2000" ) );
 		else if( osvi.dwMinorVersion == 1UL )
-			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "Windows XP" ) );
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "XP" ) );
 		else if( osvi.dwMinorVersion == 2UL )
-			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "Windows Server 2003 R2, Windows Server 2003, or Windows XP Professional x64 Edition" ) );
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "Server 2003 R2, Windows Server 2003, or Windows XP Professional x64 Edition" ) );
 	}
 	else if( osvi.dwMajorVersion == 6UL )
 	{
 		if( osvi.dwMinorVersion == 0UL )
-			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "Windows Vista or Windows Server 2008" ) );
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "Vista or Windows Server 2008" ) );
 		else if( osvi.dwMinorVersion == 1UL )
-			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "Windows 7 or Windows Server 2008 R2" ) );
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "7 or Windows Server 2008 R2" ) );
+		else if( osvi.dwMinorVersion == 2UL )
+			_tcscpy_s( tmpstr, _countof(tmpstr), _T( "8, Windows Server 2012, or newer" ) );
 	}
 
-
-	_ftprintf( fp, _T( "%s ( OS Version: %lu.%lu Build %lu%s%s )\r\n" ),
+	_ftprintf( fp, _T( "Windows %s ( OS Version: %lu.%lu Build %lu%s%s )\r\n" ),
 		tmpstr,
 		osvi.dwMajorVersion,
 		osvi.dwMinorVersion,
@@ -115,6 +137,13 @@ BOOL PrintFileHeader( FILE * fp )
 		osvi.szCSDVersion[ 0 ] ? _T(", ") : _T(""),
 		osvi.szCSDVersion
 	);
+
+	if( VerifyOSVer(6, 3, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("8.1") );
+	else if( VerifyOSVer(6, 2, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("8") );
+	else if( VerifyOSVer(6, 1, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("7") );
+	else if( VerifyOSVer(6, 0, 0) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("Vista") );
+	else if( VerifyOSVer(5, 1, 3) ) _tcscpy_s( tmpstr, _countof(tmpstr), _T("XP SP3") );
+	_ftprintf( fp, _T( "Verified: Windows %s or newer\r\n" ), tmpstr );
 
 	LANGID lang = GetSystemDefaultLangID();
 	VerLanguageName( (DWORD) lang, tmpstr, 255UL );
@@ -188,6 +217,18 @@ BOOL WriteDebugLog( LPCTSTR str )
 			GetCurrentProcessId()
 		);
 		_fputts( str, fdebug );
+
+#ifdef _DEBUG
+		TCHAR s[ 100 ];
+		_stprintf_s( s, 100, _T( "[ %04d-%02d-%02d %02d:%02d:%02d.%03d PID=%08lx ] " ),
+			st.wYear, st.wMonth, st.wDay,
+			st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+			GetCurrentProcessId()
+		);
+		OutputDebugString(s);
+		OutputDebugString(str);
+		OutputDebugString(_T("\n"));
+#endif
 	}
 	_fputts( _T( "\r\n" ), fdebug );
 	fclose( fdebug );

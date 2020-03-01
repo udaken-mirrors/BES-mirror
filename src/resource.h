@@ -4,6 +4,7 @@
 //
 #define IDC_MYICON                      2
 #define IDAPPLY                         3
+#define IDC_UNLIMIT_ALL                 3
 #define MENU_ITEM_COUNT                 29
 #define IDD_BATTLEENC_DIALOG            102
 #define IDD_ABOUTBOX                    103
@@ -19,6 +20,7 @@
 #define IDI_ACTIVE                      116
 #define IDD_QUESTION                    118
 #define IDB_FOLDER                      119
+#define IDD_LIST                        119
 #define IDC_VERSION                     1000
 #define IDC_APP_NAME                    1000
 #define IDC_DATETIME                    1001
@@ -64,6 +66,13 @@
 #define IDC_EDIT_NOTE                   1040
 #define IDC_SHOW_MANUALLY               1041
 #define IDC_EDIT_UNIT                   1042
+#define IDC_NUKE                        1043
+#define IDC_AUTOREFRESH                 1044
+#define IDC_SLIDER                      1045
+#define IDC_TEXT_PERCENT                1046
+#define IDC_SLIDER_BUTTON               1047
+#define IDC_GROUPBOX                    1048
+#define IDC_SLIDER_Q                    1049
 #define IDM_MENU_BASE                   30000
 #define IDM_ABOUT                       30000
 #define IDM_ABOUT_SHORTCUTS             30001
@@ -121,7 +130,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        120
 #define _APS_NEXT_COMMAND_VALUE         30044
-#define _APS_NEXT_CONTROL_VALUE         1043
+#define _APS_NEXT_CONTROL_VALUE         1049
 #define _APS_NEXT_SYMED_VALUE           120
 #endif
 #endif

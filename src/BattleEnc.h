@@ -24,12 +24,11 @@
 //#define MB_CUTE MB_ERR_INVALID_CHARS //0x00000008
 
 #ifdef _UNICODE
-	#define APP_NAME L"BES \x2014 Battle Encoder Shirase"
-	#define APP_LONGNAME L"BES \x2014 Battle Encoder Shirase 1.6.2"
+	#define APP_NAME L"BES \x2014 Battle Encoder Shiras\x00E9"
+	#define APP_LONGNAME L"BES \x2014 Battle Encoder Shiras\x00E9 1.7.0-alpha"
 #else
-	#define _WIN32_WINDOWS 0x0500 // Windows ME (?)
 	#define APP_NAME "BES - Battle Encoder Shirase"
-	#define APP_LONGNAME "BES - Battle Encoder Shirase 1.6.2"
+	#define APP_LONGNAME "BES - Battle Encoder Shirase 1.7.0-alpha"
 #endif
 
 #define APP_HOME_URL TEXT( "http://mion.faireal.net/BES/" )
@@ -80,6 +79,11 @@
 #define PSAPI_VERSION 1
 #include <Psapi.h> // GetModuleFileNameEx
 
+#include <errno.h>
+#ifndef STRUNCATE
+#define STRUNCATE       80
+#endif
+
 #include "resource.h"
 #include "strings.utf8.h"
 #include "sstp.sjis.h"
@@ -91,10 +95,12 @@
 
 #define JUST_UPDATE_STATUS          ( 3U )
 
+#define MAX_SLOTS (3)
 
-#define MAX_THREAD_CNT  128
+//#define MAX_THREAD_CNT  128
 #define MAX_PROCESS_CNT  256
-#define MAX_WINDOWTEXT 1024
+//#define MAX_WINDOWTEXT 1024
+#define MAX_WINDOWTEXT 256
 #define CCHPATH   (MAX_PATH*2)
 #define CCHPATHEX (MAX_PATH*2+20)
 
@@ -159,16 +165,19 @@
 #define XLIST_NEW_TARGET         2048
 #define XLIST_UNFREEZE           4096
 
+// These values may also be used as LOWORD of lp of WM_USER_STOP (as notification)
 #define STOP_FROM_TRAY     0x000A
 #define NORMAL_TERMINATION 0x1000
 #define NOT_WATCHING       0x1001
 #define THREAD_NOT_OPENED  0xEEEE
 #define TARGET_MISSING     0xF000
+// These flags may be used as HIWORD of lp of WM_USER_STOP
+#define STOPF_NO_INVALIDATE 0x00010000
+#define STOPF_NO_LV_REFRESH 0x00020000
 
 #define UNWATCH_NOW -2
 
 #define WM_USER_HACK       ( WM_APP +   1U )
-#define STOPF_NO_INVALIDATE 0x0001
 #define WM_USER_STOP       ( WM_APP +   2U ) // wp: iMyId/JUST_UPDATE_STATUS, lp: STOPFlags
 #define WM_USER_RESTART    ( WM_APP +   3U )
 #define WM_USER_NOTIFYICON ( WM_APP +  10U )
@@ -276,26 +285,46 @@ errno_t wcsncpy_s(
 #define _TRUNCATE ((size_t)-1)
 #endif
 
+int _snprintf_s(
+   char *buffer,
+   size_t sizeOfBuffer,
+   size_t count,
+   const char *format,
+      ... 
+);
+int _snwprintf_s(
+   wchar_t *buffer,
+   size_t sizeOfBuffer,
+   size_t count,
+   const wchar_t *format,
+      ... 
+);
 #if defined(_UNICODE)
 #define _tcsncpy_s   wcsncpy_s
 #else
 #define _tcsncpy_s   strncpy_s
 #endif
 
+
+#ifdef _UNICODE
+#define _sntprintf_s  _snwprintf_s
+#else
+#define _sntprintf_s  _snprintf_s
+#endif
+
 #endif // < VC2005
-
-
 
 typedef struct tagTargetInfo {
 	TCHAR szExe[ CCHPATH ];
 	TCHAR szPath[ CCHPATH ];
 	TCHAR szText[ MAX_WINDOWTEXT ];
-	//DWORD dwThreadId[ MAX_THREAD_CNT ];
+	ULONGLONG CPUTime;
 	
 	DWORD dwProcessId;
 	int iIFF;
-	
-	//unsigned wThreadCount;
+	float _cpu;
+
+	DWORD numOfThreads;
 	bool fWatch;
 	bool fRealTime;
 	bool fThisIsBES;
@@ -332,7 +361,7 @@ typedef struct tagBesCopyData {
 
 unsigned __stdcall Hack( LPVOID dwTargetProcessId );
 
-BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp );
+BOOL SelectWatch( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp );
 BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp, LPCTSTR lpszTargetPath, LPCTSTR lpszTargetExe );
 
 BOOL Unfreeze( HWND hWnd, DWORD dwProcessID );
@@ -393,7 +422,7 @@ VOID InitSWIni( VOID );
 VOID SaveCmdShow( HWND hWnd, int nCmdShow );
 int GetCmdShow( HWND hWnd );
 
-BOOL BES_ShowWindow( HWND hCurWnd, HWND hwnd, int iShow );
+static BOOL BES_ShowWindow( HWND hCurWnd, HWND hwnd, int iShow );
 #define BES_ERROR                -600
 
 #define BES_DELETE_KEY           -100
@@ -406,7 +435,7 @@ VOID GShow( HWND hWnd );
 
 HFONT UpdateFont( HFONT hFont );
 
-HMODULE SafeLoadLibrary( LPCTSTR pLibName );
+
 
 LRESULT CALLBACK	WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK	About(HWND, UINT, WPARAM, LPARAM);
@@ -416,7 +445,7 @@ INT_PTR CALLBACK Settings( HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam
 VOID AboutShortcuts( HWND hWnd );
 
 ptrdiff_t ListProcessThreads( DWORD dwOwnerPID, DWORD * pThreadIDs, ptrdiff_t numOfMaxIDs );
-DWORD * ListProcessThreads_Alloc( DWORD dwOwnerPID, ptrdiff_t * pNumOfThreads );
+DWORD * ListProcessThreads_Alloc( DWORD dwOwnerPID, ptrdiff_t& numOfThreads );
 
 BOOL SaveSnap( HWND hWnd );
 BOOL SaveSnap( LPCTSTR lpszSavePath );
@@ -626,3 +655,12 @@ BOOL IsOptionSet( const TCHAR * pCmdLine, const TCHAR * pOption, const TCHAR * p
 
 //*-------------------------------
 #endif // !defined(BATTLEENC_H)
+
+inline bool IsMenuChecked( HMENU hMenu, int idm )
+{
+	return !!( MF_CHECKED & GetMenuState( hMenu, (UINT) idm, MF_BYCOMMAND ) );
+}
+inline bool IsMenuChecked( HWND hWnd, int idm )
+{
+	return !!( MF_CHECKED & GetMenuState( GetMenu( hWnd ), (UINT) idm, MF_BYCOMMAND ) );
+}

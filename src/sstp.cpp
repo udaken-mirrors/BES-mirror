@@ -206,7 +206,7 @@ static HWND GetSakuraHwnd( LPCTSTR lpszAgentName )
 */
 }
 
-
+#ifdef UKAGAKA
 BOOL SSTP_Aviutl( HWND hWnd, LPCTSTR lpTitle )
 {
 #define SSTP_AVIUTL_BUF_SIZE 1024
@@ -280,4 +280,4 @@ BOOL SSTP_Aviutl( HWND hWnd, LPCTSTR lpTitle )
 	return DirectSSTP( hWnd, lpSjisSakuraScript, "", "Shift_JIS" );
 }
 
-
+#endif

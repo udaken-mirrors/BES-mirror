@@ -419,7 +419,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 		{
 			PAINTSTRUCT ps;
 			HDC hdc = BeginPaint( hDlg, &ps );
-			const int nSaved = SaveDC( hdc );
+			const int iSaved = SaveDC( hdc );
 			
 			HFONT hfontURL = GetFontForURL( hdc );
 			HFONT hOldFont = SelectFont( hdc, hfontURL );
@@ -433,7 +433,7 @@ INT_PTR CALLBACK About( HWND hDlg, UINT uMessage, WPARAM wParam, LPARAM lParam )
 			SelectObject( hdc, hOldFont );
 			DeleteFont( hfontURL );
 			
-			RestoreDC( hdc, nSaved );
+			RestoreDC( hdc, iSaved );
 			EndPaint( hDlg, &ps );
 			break;
 		}
@@ -1226,6 +1226,152 @@ errno_t strncpy_s(
 	return ret;
 }
 
+int _snprintf_s(
+   char *buffer,
+   size_t sizeOfBuffer,
+   size_t count,
+   const char *format,
+      ... 
+)
+{
+	if( ! buffer
+		|| ! format
+		|| count != _TRUNCATE && (SSIZE_T) count < 0
+	)
+	{
+		if( buffer ) *buffer = '\0';
+
+		errno = EINVAL;
+		return -1;
+	}
+
+	// buffer-full detector
+	if( 1 <= sizeOfBuffer ) buffer[ sizeOfBuffer - 1 ] = '\0';
+
+	// The following works even if count == 0, when iRetValue is 0 if
+	// format is something like "", or -1 otherwise.
+	
+	const size_t cch = ( count == _TRUNCATE )? sizeOfBuffer
+		: __min( sizeOfBuffer, count )
+		;
+
+	va_list args;
+	va_start( args, format );
+	
+#if ( defined( _MSC_VER ) )
+	int iRetValue = _vsnprintf( buffer, cch, format, args );
+#else
+	int iRetValue = vsnprintf( buffer, cch, format, args );
+#endif
+
+	// Buffer full, Truncation, or Error
+	if( cch <= (size_t) iRetValue
+		||
+		iRetValue < 0
+	)
+	{
+		if( iRetValue == -1 && 1 <= sizeOfBuffer && buffer[ sizeOfBuffer - 1 ] == '\0' )
+		{
+			*buffer = '\0';
+			errno = 0;
+		}
+		// Expected truncation
+		else if( count == _TRUNCATE )
+		{
+			buffer[ sizeOfBuffer - 1 ] =  '\0';
+			iRetValue = -1;
+		}
+		// Buffer size is ok: if iRetValue==cch, even no truncation is needed
+		else if( count < sizeOfBuffer )
+		{
+			buffer[ count ] =  '\0';
+			iRetValue = ( cch == (size_t) iRetValue )? (int) count : -1 ;
+		}
+		else
+		{
+			*buffer =  '\0';
+			iRetValue = -1;
+
+			errno = ERANGE;
+		}
+	}
+
+	va_end( args );
+
+	return iRetValue;
+}
+
+int _snwprintf_s(
+   wchar_t *buffer,
+   size_t sizeOfBuffer,
+   size_t count,
+   const wchar_t *format,
+      ... 
+)
+{
+	if( ! buffer
+		|| ! format
+		|| count != _TRUNCATE && (SSIZE_T) count < 0
+	)
+	{
+		if( buffer ) *buffer = L'\0';
+
+		errno = EINVAL;
+		return -1;
+	}
+
+	if( 1 <= sizeOfBuffer ) buffer[ sizeOfBuffer - 1 ] = L'\0';
+	
+	// The following works even if count == 0, when iRetValue is 0 if
+	// format is something like "", or -1 otherwise.
+	
+	const size_t cch = ( count == _TRUNCATE )? sizeOfBuffer
+		: __min( sizeOfBuffer, count )
+		;
+
+	va_list args;
+	va_start( args, format );
+	
+	int iRetValue = _vsnwprintf( buffer, cch, format, args );
+
+	// Buffer full, Truncation, or Error
+	if( cch <= (size_t) iRetValue
+		||
+		iRetValue < 0
+	)
+	{
+		// error involving U+FFFF
+		if( iRetValue == -1 && 1 <= sizeOfBuffer && buffer[ sizeOfBuffer - 1 ] == L'\0' )
+		{
+			*buffer =  L'\0';
+			errno = 0; // like VC2005/2008
+		}
+		// Expected truncation
+		else if( count == _TRUNCATE )
+		{
+			buffer[ sizeOfBuffer - 1 ] =  L'\0';
+			iRetValue = -1;
+		}
+		// Buffer size is ok: if iRetValue==cch, even no truncation is needed
+		else if( count < sizeOfBuffer )
+		{
+			buffer[ count ] =  L'\0';
+			iRetValue = ( cch == (size_t) iRetValue )? (int) count : -1 ;
+		}
+		else
+		{
+			*buffer =  L'\0';
+			iRetValue = -1;
+
+			errno = ERANGE;
+		}
+	}
+	
+	va_end( args );
+
+	return iRetValue;
+}
+
 #endif // < VC2005
 
 
@@ -1291,3 +1437,4 @@ void OpenBrowser( LPCTSTR lpUrl )
 			SW_SHOWNORMAL
 		);
 }
+

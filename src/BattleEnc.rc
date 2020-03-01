@@ -165,34 +165,10 @@ BEGIN
                     NOT WS_BORDER | WS_VSCROLL,WS_EX_STATICEDGE
 END
 
-IDD_XLIST DIALOGEX 80, 80, 359, 230
-STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Which process would you like to limit?"
-FONT 10, "Tahoma", 0, 0, 0x1
-BEGIN
-    LISTBOX         IDC_TARGET_LIST,7,7,274,135,LBS_SORT | 
-                    LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_HSCROLL | 
-                    WS_TABSTOP
-    DEFPUSHBUTTON   "&Limit this",IDOK,300,7,50,29
-    PUSHBUTTON      "Limit/&Watch",IDC_WATCH,300,40,50,14
-    PUSHBUTTON      "&Close",IDCANCEL,300,58,50,29
-    PUSHBUTTON      "&Refresh (F5)",IDC_RELOAD,300,107,50,14
-    PUSHBUTTON      "&Friend",IDC_FRIEND,77,144,50,14
-    PUSHBUTTON      "&Unknown",IDC_RESET_IFF,133,144,50,14
-    PUSHBUTTON      "F&oe",IDC_FOE,188,144,50,14
-    PUSHBUTTON      "&Hide",IDC_HIDE,307,133,36,14,BS_FLAT
-    PUSHBUTTON      "&Show",IDC_SHOW,307,150,36,14,BS_FLAT
-    PUSHBUTTON      "As&k/show",IDC_SHOW_MANUALLY,307,167,36,14,BS_FLAT
-    PUSHBUTTON      "List &all",IDC_LISTALL_SYS,300,190,50,14,BS_FLAT
-    PUSHBUTTON      "Unfree&ze",IDC_UNFREEZE,300,207,50,14,BS_FLAT
-    EDITTEXT        IDC_EDIT_INFO,7,161,274,62,ES_MULTILINE | ES_READONLY | 
-                    NOT WS_BORDER | WS_VSCROLL,WS_EX_STATICEDGE
-END
-
 IDD_SETTINGS DIALOGEX 200, 0, 339, 328
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Limiter control"
-FONT 10, "Tahoma"
+FONT 10, "Tahoma", 0, 0, 0x1
 BEGIN
     GROUPBOX        "Target #1",IDC_GROUP1,7,7,325,54,BS_FLAT
     EDITTEXT        IDC_EDIT_TARGET1,17,20,240,12,ES_AUTOHSCROLL | 
@@ -247,6 +223,41 @@ BEGIN
                     WS_EX_STATICEDGE
 END
 
+IDD_LIST DIALOGEX 240, 20, 454, 303
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Which process would you like to limit?"
+FONT 10, "Tahoma", 0, 0, 0x1
+BEGIN
+    CONTROL         "List3",IDC_TARGET_LIST,"SysListView32",LVS_REPORT | 
+                    LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | 
+                    WS_TABSTOP,7,7,368,197
+    DEFPUSHBUTTON   "&Limit this",IDOK,387,7,60,29
+    PUSHBUTTON      "Limit/&Watch",IDC_WATCH,387,40,60,14
+    PUSHBUTTON      "&Close",IDCANCEL,387,58,60,29
+    PUSHBUTTON      "&Refresh (F5)",IDC_RELOAD,387,99,60,14
+    CONTROL         "Auto-r&efresh",IDC_AUTOREFRESH,"Button",BS_AUTOCHECKBOX | 
+                    WS_TABSTOP,387,116,60,10
+    PUSHBUTTON      "Unli&mit All",IDC_UNLIMIT_ALL,387,134,60,29
+    PUSHBUTTON      "&Friend",IDC_FRIEND,77,209,50,14
+    PUSHBUTTON      "&Unknown",IDC_RESET_IFF,133,209,50,14
+    PUSHBUTTON      "F&oe",IDC_FOE,188,209,50,14
+    GROUPBOX        "Target",IDC_GROUPBOX,7,228,368,68,BS_FLAT
+    EDITTEXT        IDC_EDIT_INFO,20,243,279,22,ES_MULTILINE | ES_READONLY | 
+                    NOT WS_BORDER | WS_VSCROLL | NOT WS_TABSTOP,
+                    WS_EX_STATICEDGE
+    PUSHBUTTON      "Unl&imit",IDC_SLIDER_BUTTON,305,247,60,14
+    CONTROL         "1",IDC_SLIDER,"msctls_trackbar32",WS_TABSTOP,23,271,252,
+                    19
+    CTEXT           "",IDC_TEXT_PERCENT,285,272,51,15,SS_CENTERIMAGE,
+                    WS_EX_STATICEDGE
+    PUSHBUTTON      "?",IDC_SLIDER_Q,344,273,21,14
+    PUSHBUTTON      "&Hide",IDC_HIDE,394,189,46,14,BS_FLAT
+    PUSHBUTTON      "&Show",IDC_SHOW,394,206,46,14,BS_FLAT
+    PUSHBUTTON      "As&k/Show",IDC_SHOW_MANUALLY,394,223,46,14,BS_FLAT
+    PUSHBUTTON      "List &all",IDC_LISTALL_SYS,387,252,60,14,BS_FLAT
+    PUSHBUTTON      "Unfree&ze",IDC_UNFREEZE,387,269,60,14,BS_FLAT
+END
+
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -290,14 +301,6 @@ BEGIN
         RIGHTMARGIN, 332
     END
 
-    IDD_XLIST, DIALOG
-    BEGIN
-        LEFTMARGIN, 7
-        RIGHTMARGIN, 352
-        TOPMARGIN, 7
-        BOTTOMMARGIN, 223
-    END
-
     IDD_SETTINGS, DIALOG
     BEGIN
         LEFTMARGIN, 7
@@ -312,6 +315,14 @@ BEGIN
         RIGHTMARGIN, 324
         TOPMARGIN, 7
         BOTTOMMARGIN, 157
+    END
+
+    IDD_LIST, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 447
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 296
     END
 END
 #endif    // APSTUDIO_INVOKED
@@ -334,8 +345,8 @@ IDI_ACTIVE              ICON    DISCARDABLE     "active.ico"
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,6,2,0
- PRODUCTVERSION 1,6,2,0
+ FILEVERSION 1,7,0,3
+ PRODUCTVERSION 1,7,0,3
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -351,16 +362,16 @@ BEGIN
         BLOCK "000004b0"
         BEGIN
             VALUE "Comments", "GNU General Public License\0"
-            VALUE "CompanyName", " \0"
+            VALUE "CompanyName", "http://mion.faireal.net/BES/\0"
             VALUE "FileDescription", "Per-Process CPU Limiter\0"
-            VALUE "FileVersion", "1, 6, 2, 0\0"
+            VALUE "FileVersion", "1, 7, 0, 3\0"
             VALUE "InternalName", "BES\0"
             VALUE "LegalCopyright", "Copyright 2004-2014\0"
             VALUE "LegalTrademarks", "\0"
             VALUE "OriginalFilename", "BES.exe\0"
             VALUE "PrivateBuild", "\0"
-            VALUE "ProductName", "BES - Battle Encoder Shirase\0"
-            VALUE "ProductVersion", "1, 6, 2, 0\0"
+            VALUE "ProductName", "BES - Battle Encoder Shirasé\0"
+            VALUE "ProductVersion", "1, 7, 0, 3\0"
             VALUE "SpecialBuild", "\0"
         END
     END

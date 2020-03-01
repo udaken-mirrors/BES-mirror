@@ -53,7 +53,7 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 	_stprintf_s( str, _countof(str), _T( "Watching : %s" ), lpszTargetPath );
 	WriteDebugLog( str );
 
-#ifdef _UNICODE
+#if 1//def _UNICODE  // ANSIFIX@20140307(1/5)
 	_tcscpy_s( lpszStatus[ 14 ], cchStatus, lpszTargetPath );
 #else
 	strcpy_s( str, _countof(str), lpszTargetPath );
@@ -68,8 +68,10 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 	AdjustLength( lpszStatus[ 14 ] );
 
 	g_Slider[ 2 ] = GetSliderIni( lpszTargetPath, hWnd );
-	g_dwTargetProcessId[ 2 ] = WATCHING_IDLE;
-	UpdateStatus( hWnd );
+
+
+	// UpdateStatus( hWnd );
+	bool fInitialUpdate = true;
 
 	ptrdiff_t slotid = 2;
 	
@@ -81,11 +83,13 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 		bool fNewTarget = false;
 		DWORD dwPID = 0L;
 
+		// CASE 1: No PID was given
 		if( hp[ 2 ].lpTarget->dwProcessId == TARGET_PID_NOT_SET )
 		{
 			g_dwTargetProcessId[ 2 ] = PathToProcessID( lpszTargetPath );
 			fNewTarget = ( g_dwTargetProcessId[ 2 ] && g_dwTargetProcessId[ 2 ] != (DWORD) -1 );
 		}
+		// CASE 2: PID has been given; Slot 2 is used
 		else if( g_dwTargetProcessId[ 2 ] && g_dwTargetProcessId[ 2 ] != (DWORD) -1 )
 		{
 			if( fWatchMulti && ( g_bHack[ 0 ] || g_bHack[ 1 ] || g_bHack[ 2 ] ) )
@@ -104,9 +108,10 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 					fNewTarget = true;
 			}
 		}
+		// CASE 3: PID has been given; Slot 2 is free
 		else
 		{
-			g_dwTargetProcessId[ 2 ] = hp[ 2 ].lpTarget->dwProcessId;
+			g_dwTargetProcessId[ 2 ] = hp[ 2 ].lpTarget->dwProcessId; //###
 			fNewTarget = true;
 			_stprintf_s( str, _countof(str), _T( "Watching : ProcessID given : %08lX" ), 
 						g_dwTargetProcessId[ 2 ] );
@@ -115,7 +120,7 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 
 		if( fNewTarget )
 		{
-			if( dwPID )
+			if( dwPID ) // non-first instance in multi-watch
 			{
 				if( ! g_bHack[ 2 ] )
 					slotid = 2;
@@ -136,17 +141,17 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 		{
 			if( WaitForSingleObject( hSemaphore[ slotid ], 1000 ) == WAIT_OBJECT_0 )
 			{
-				if( dwPID )
+				if( dwPID ) // non-first instance in multi-watch
 				{
 					hp[ slotid ].lpTarget->dwProcessId = dwPID;
-					g_dwTargetProcessId[ slotid ] = dwPID;
+					g_dwTargetProcessId[ slotid ] = dwPID; // ###
 				}
 			}
 			else
 			{
 				fNewTarget = false;
 
-				if( ! dwPID )
+				if( ! dwPID ) // single-watch
 				{
 					g_bHack[ slotid ] = FALSE;
 					MessageBox( hWnd, TEXT("Sema Error in LimitPlus()"), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
@@ -157,7 +162,7 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 
 		if( fNewTarget )
 		{
-			for( i = 0; i < 3; ++i )
+			for( i = 0; i < 3; ++i ) // if already-limited but non-watched, stop the old limiting
 			{
 				if( i == slotid )
 					continue;
@@ -189,6 +194,15 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 		{
 			_stprintf_s( str, _countof(str), _T( "Watching : Found! <%s>" ), lpszTargetPath );
 			WriteDebugLog( str );
+
+			SYSTEMTIME st;
+			GetLocalTime( &st );
+			_stprintf_s( lpszStatus[ 15 ], cchStatus, 
+							_T( "%02d:%02d:%02d Found [PID %lu]" ),
+							st.wHour,
+							st.wMinute,
+							st.wSecond,
+							g_dwTargetProcessId[ slotid ] );
 			
 			hp[ slotid ].lpTarget->dwProcessId = g_dwTargetProcessId[ slotid ];
 			_tcscpy_s( hp[ slotid ].lpTarget->szPath, CCHPATH, lpszTargetPath );
@@ -200,20 +214,18 @@ static unsigned __stdcall LimitPlus( LPVOID lpVoid )
 
 			SendMessage( hWnd, WM_USER_HACK, (WPARAM) slotid, (LPARAM) &hp[ slotid ] );
 
-			SYSTEMTIME st;
-			GetLocalTime( &st );
-			
-			_stprintf_s( lpszStatus[ 15 ], cchStatus, 
-							_T( "%02d:%02d:%02d Found ( %08lX )" ),
-							st.wHour,
-							st.wMinute,
-							st.wSecond,
-							g_dwTargetProcessId[ slotid ] );
-
-			UpdateStatus( hWnd );
+			// UpdateStatus not needed here; it'll be done on WM_USER_HACK
+			// UpdateStatus( hWnd );
+			fInitialUpdate = false;
 
 			if( fWatchMulti ) // look for another instance now, without waiting
 				continue;
+		}
+
+		if( fInitialUpdate )
+		{
+			UpdateStatus( hWnd );
+			fInitialUpdate = false;
 		}
 
 		UINT kMax = GetPrivateProfileInt( _T("Options"), _T("WatchRT"), 80, GetIniPath() );
@@ -275,7 +287,7 @@ EXIT_THREAD:
 }
 
 
-BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp )
+BOOL SelectWatch( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp )
 {
 	const TCHAR * strIniPath = GetIniPath();
 	TCHAR szWatchDir[ MAX_PATH * 2 ] = _T("");
@@ -341,13 +353,13 @@ BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp )
 
 	if( IsProcessBES( PathToProcessID( lpszTargetPath ) ) )
 	{
-		MessageBox( hWnd, _T("BES can't target itself!"), lpszTargetPath, MB_OK | MB_ICONWARNING );
+		MessageBox( hWnd, lpszTargetPath, TEXT("BES Can't Target BES"), MB_OK | MB_ICONEXCLAMATION );
 		return FALSE;
 	}
 
 	lphp->lpTarget->dwProcessId = TARGET_PID_NOT_SET;
 
-#if !defined( _UNICODE )
+#if 0//!defined( _UNICODE ) // ANSIFIX@20140307(2/5)
 	_tcscpy_s( lpszTargetPath, _countof(lpszTargetPath), lpszTargetExe );
 #endif
 
@@ -360,12 +372,14 @@ BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp )
 BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp,
 				   LPCTSTR lpszTargetPath, LPCTSTR lpszTargetExe )
 {
+	// we always use the slot 2 to start watching.
 	if( g_bHack[ 2 ] || g_bHack[ 3 ] )
 	{
-		MessageBox( hWnd, TEXT("Already busy."), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
+		MessageBox( hWnd, TEXT("Busy"), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
 		return FALSE;
 	}
 
+	// sema2 will be acquired in LimitPlus, not here
 	/*if( WaitForSingleObject( hSemaphore[ 2 ], 100UL ) != WAIT_OBJECT_0 )
 	{
 		MessageBox( hWnd, TEXT("Sema Error (2)"), APP_NAME, MB_OK | MB_ICONEXCLAMATION );
@@ -391,12 +405,14 @@ BOOL SetTargetPlus( HWND hWnd, HANDLE * phChildThread, LPHACK_PARAMS lphp,
 	}
 
 	lphp->iMyId = 2;
+	lphp->lpTarget->fWatch = true; // ?
 
 	*phChildThread = CreateThread2( &LimitPlus,	lphp );
 
 	if( *phChildThread == NULL )
 	{
-//		ReleaseSemaphore( hSemaphore[ 2 ], 1L, (LONG *) NULL );
+		lphp->lpTarget->fWatch = false; // ?
+		//ReleaseSemaphore( hSemaphore[ 2 ], 1L, (LONG *) NULL );
 		ReleaseSemaphore( hSemaphore[ 3 ], 1L, (LONG *) NULL );
 		g_bHack[ 2 ] = FALSE;
 		g_bHack[ 3 ] = FALSE;

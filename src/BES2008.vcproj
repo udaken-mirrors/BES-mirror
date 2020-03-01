@@ -186,7 +186,7 @@
 				DebugInformationFormat="0"
 				DisableSpecificWarnings="4711"
 				UndefinePreprocessorDefinitions="_MBCS,MBCS,_DEBUG,DEBUG,min,max"
-				EnablePREfast="true"
+				EnablePREfast="false"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -423,7 +423,7 @@
 				DebugInformationFormat="0"
 				DisableSpecificWarnings="4711"
 				UndefinePreprocessorDefinitions="_MBCS,MBCS,_DEBUG,DEBUG,min,max"
-				EnablePREfast="false"
+				EnablePREfast="true"
 			/>
 			<Tool
 				Name="VCManagedResourceCompilerTool"
@@ -990,6 +990,10 @@
 			>
 			<File
 				RelativePath="BattleEnc.h"
+				>
+			</File>
+			<File
+				RelativePath=".\list.h"
 				>
 			</File>
 			<File
